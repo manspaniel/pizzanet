@@ -1,0 +1,622 @@
+{
+  "schema_version": 1,
+  "pack_id": "pizzahut-synthetic-public-assets-v1",
+  "retrieved_on": "2026-07-20",
+  "publisher": {
+    "name": "Poly Haven",
+    "url": "https://polyhaven.com/"
+  },
+  "license": {
+    "spdx_id": "CC0-1.0",
+    "name": "CC0 1.0 Universal",
+    "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "publisher_statement_url": "https://polyhaven.com/license"
+  },
+  "total_asset_bytes": 18328942,
+  "assets": [
+    {
+      "id": "polyhaven_corrugated_iron_02",
+      "kind": "material",
+      "title": "Corrugated Iron 02",
+      "source_page_url": "https://polyhaven.com/a/corrugated_iron_02",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Jenelle van Heerden",
+          "role": "processing"
+        },
+        {
+          "name": "Sergej Majboroda",
+          "role": "photography"
+        }
+      ],
+      "recommended_surfaces": [
+        "roof",
+        "metal_cladding"
+      ],
+      "seamless": true,
+      "real_world_width_m": 2.7,
+      "files": [
+        {
+          "role": "base_color",
+          "path": "materials/corrugated_iron_02/corrugated_iron_02_diff_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/corrugated_iron_02/corrugated_iron_02_diff_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "srgb",
+          "gpu_format_after_decode": "Rgba8UnormSrgb",
+          "byte_length": 568492,
+          "sha256": "7a7b43099d015c1b08ebb175da5965caeae44b86de65a727b3fffa20a7c69a93"
+        },
+        {
+          "role": "normal_opengl",
+          "path": "materials/corrugated_iron_02/corrugated_iron_02_nor_gl_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/corrugated_iron_02/corrugated_iron_02_nor_gl_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "linear_data",
+          "gpu_format_after_decode": "Rgba8Unorm",
+          "channel_layout": {
+            "r": "tangent_x",
+            "g": "tangent_y_positive",
+            "b": "tangent_z"
+          },
+          "byte_length": 489773,
+          "sha256": "9743c93668689c36a67e9c4dc8d6a0870fe91202f82dcdaf70ddc330c12f9ecb"
+        },
+        {
+          "role": "ambient_occlusion_roughness_metalness",
+          "path": "materials/corrugated_iron_02/corrugated_iron_02_arm_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/corrugated_iron_02/corrugated_iron_02_arm_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "linear_data",
+          "gpu_format_after_decode": "Rgba8Unorm",
+          "channel_layout": {
+            "r": "ambient_occlusion",
+            "g": "roughness",
+            "b": "metalness"
+          },
+          "byte_length": 904443,
+          "sha256": "da4197f5b3e199ef693082836ca803f9d5cad2b4998a1c1c3dc4ac384f93a890"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_roof_07",
+      "kind": "material",
+      "title": "Roof 07",
+      "source_page_url": "https://polyhaven.com/a/roof_07",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Rob Tuytel",
+          "role": "author"
+        }
+      ],
+      "recommended_surfaces": [
+        "roof"
+      ],
+      "seamless": true,
+      "real_world_width_m": 2.0,
+      "files": [
+        {
+          "role": "base_color",
+          "path": "materials/roof_07/roof_07_diff_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/roof_07/roof_07_diff_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "srgb",
+          "gpu_format_after_decode": "Rgba8UnormSrgb",
+          "byte_length": 584122,
+          "sha256": "41b7cd7785c60bfe1348eeb7642b4fbb412ff9dab710b4b8016cce70c37a9239"
+        },
+        {
+          "role": "normal_opengl",
+          "path": "materials/roof_07/roof_07_nor_gl_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/roof_07/roof_07_nor_gl_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "linear_data",
+          "gpu_format_after_decode": "Rgba8Unorm",
+          "channel_layout": {
+            "r": "tangent_x",
+            "g": "tangent_y_positive",
+            "b": "tangent_z"
+          },
+          "byte_length": 344106,
+          "sha256": "af231288c45d24c8e0c1675b4b239e9bfd3800de699b1bc66cf50dfd733c93a8"
+        },
+        {
+          "role": "ambient_occlusion_roughness_metalness",
+          "path": "materials/roof_07/roof_07_arm_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/roof_07/roof_07_arm_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "linear_data",
+          "gpu_format_after_decode": "Rgba8Unorm",
+          "channel_layout": {
+            "r": "ambient_occlusion",
+            "g": "roughness",
+            "b": "metalness"
+          },
+          "byte_length": 318728,
+          "sha256": "98312c2b48497c9eb34e0e813e16aa8961046aad5437c356d01fd0090b2d71cc"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_brick_wall_001",
+      "kind": "material",
+      "title": "Brick Wall 001",
+      "source_page_url": "https://polyhaven.com/a/brick_wall_001",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Dimitrios Savva",
+          "role": "photography"
+        },
+        {
+          "name": "Rob Tuytel",
+          "role": "processing"
+        }
+      ],
+      "recommended_surfaces": [
+        "facade"
+      ],
+      "seamless": true,
+      "real_world_width_m": 3.0,
+      "files": [
+        {
+          "role": "base_color",
+          "path": "materials/brick_wall_001/brick_wall_001_diffuse_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_diffuse_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "srgb",
+          "gpu_format_after_decode": "Rgba8UnormSrgb",
+          "byte_length": 574381,
+          "sha256": "6a1233ec0186703de830354d89f122991e61e67fb67e0846c7eaf6c5aefea902"
+        },
+        {
+          "role": "normal_opengl",
+          "path": "materials/brick_wall_001/brick_wall_001_nor_gl_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_nor_gl_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "linear_data",
+          "gpu_format_after_decode": "Rgba8Unorm",
+          "channel_layout": {
+            "r": "tangent_x",
+            "g": "tangent_y_positive",
+            "b": "tangent_z"
+          },
+          "byte_length": 295279,
+          "sha256": "8afbe3919308b168a6b7235fe7b930f670cfffa1a34de39ee790d55c9d7bda09"
+        },
+        {
+          "role": "ambient_occlusion_roughness_metalness",
+          "path": "materials/brick_wall_001/brick_wall_001_arm_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_arm_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "linear_data",
+          "gpu_format_after_decode": "Rgba8Unorm",
+          "channel_layout": {
+            "r": "ambient_occlusion",
+            "g": "roughness",
+            "b": "metalness"
+          },
+          "byte_length": 123384,
+          "sha256": "8e6ab4cecd82c4305c9511065b0795bd579df89df8364a76a7359c1278bed38d"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_clean_asphalt",
+      "kind": "material",
+      "title": "Clean Asphalt",
+      "source_page_url": "https://polyhaven.com/a/clean_asphalt",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Dimitrios Savva",
+          "role": "author"
+        }
+      ],
+      "recommended_surfaces": [
+        "parking_area",
+        "road"
+      ],
+      "seamless": true,
+      "real_world_width_m": 2.1,
+      "files": [
+        {
+          "role": "base_color",
+          "path": "materials/clean_asphalt/clean_asphalt_diff_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/clean_asphalt/clean_asphalt_diff_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "srgb",
+          "gpu_format_after_decode": "Rgba8UnormSrgb",
+          "byte_length": 697630,
+          "sha256": "ddf9224e9cfa3eb2998d9097e4cd34bd3630c85e0e6798e5a0a000415a684083"
+        },
+        {
+          "role": "normal_opengl",
+          "path": "materials/clean_asphalt/clean_asphalt_nor_gl_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/clean_asphalt/clean_asphalt_nor_gl_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "linear_data",
+          "gpu_format_after_decode": "Rgba8Unorm",
+          "channel_layout": {
+            "r": "tangent_x",
+            "g": "tangent_y_positive",
+            "b": "tangent_z"
+          },
+          "byte_length": 776360,
+          "sha256": "99cdf6b6f0b8a319d206e1d561bf2a5d9933d8d33e1d685f8e25388101d21310"
+        },
+        {
+          "role": "ambient_occlusion_roughness_metalness",
+          "path": "materials/clean_asphalt/clean_asphalt_arm_1k.jpg",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/clean_asphalt/clean_asphalt_arm_1k.jpg",
+          "media_type": "image/jpeg",
+          "dimensions": [
+            1024,
+            1024
+          ],
+          "sample_color_space": "linear_data",
+          "gpu_format_after_decode": "Rgba8Unorm",
+          "channel_layout": {
+            "r": "ambient_occlusion",
+            "g": "roughness",
+            "b": "metalness"
+          },
+          "byte_length": 760451,
+          "sha256": "dedb9a28ebadd2848856af8672eeabed1286b5729c3387c0734efa66819dbed3"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_kloofendal_43d_clear_puresky",
+      "kind": "environment",
+      "title": "Kloofendal 43d Clear (Pure Sky)",
+      "source_page_url": "https://polyhaven.com/a/kloofendal_43d_clear_puresky",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Greg Zaal",
+          "role": "author"
+        }
+      ],
+      "provenance_note": "Edited sky-only version of Kloofendal 43d Clear.",
+      "environment_classes": [
+        "day",
+        "clear",
+        "high_contrast",
+        "pure_sky"
+      ],
+      "files": [
+        {
+          "role": "equirectangular_environment",
+          "path": "environments/kloofendal_43d_clear_puresky_1k.hdr",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_43d_clear_puresky_1k.hdr",
+          "media_type": "image/vnd.radiance",
+          "dimensions": [
+            1024,
+            512
+          ],
+          "projection": "equirectangular",
+          "sample_color_space": "linear_hdr",
+          "gpu_format_after_decode": "Rgba16Float_or_Rgba32Float",
+          "byte_length": 1184531,
+          "sha256": "de7ba9d0b070470dbb70d0144294c8708068df353537b26ab59c394707e84377"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_snow_field_puresky",
+      "kind": "environment",
+      "title": "Snow Field (Pure Sky)",
+      "source_page_url": "https://polyhaven.com/a/snow_field_puresky",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Jarod Guest",
+          "role": "sky_edits"
+        },
+        {
+          "name": "Sergej Majboroda",
+          "role": "original"
+        }
+      ],
+      "provenance_note": "Edited sky-only version of Snow Field.",
+      "environment_classes": [
+        "day",
+        "overcast",
+        "low_contrast",
+        "pure_sky"
+      ],
+      "files": [
+        {
+          "role": "equirectangular_environment",
+          "path": "environments/snow_field_puresky_1k.hdr",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/snow_field_puresky_1k.hdr",
+          "media_type": "image/vnd.radiance",
+          "dimensions": [
+            1024,
+            512
+          ],
+          "projection": "equirectangular",
+          "sample_color_space": "linear_hdr",
+          "gpu_format_after_decode": "Rgba16Float_or_Rgba32Float",
+          "byte_length": 1128193,
+          "sha256": "23ed043c4bcb6b92b1e91d44bf4a4354341c89a94314023f37756d38094f5194"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_urban_street_04",
+      "kind": "environment",
+      "title": "Urban Street 04",
+      "source_page_url": "https://polyhaven.com/a/urban_street_04",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Andreas Mischok",
+          "role": "author"
+        }
+      ],
+      "environment_classes": [
+        "day",
+        "urban",
+        "partly_cloudy",
+        "high_contrast"
+      ],
+      "files": [
+        {
+          "role": "equirectangular_environment",
+          "path": "environments/urban_street_04_1k.hdr",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/urban_street_04_1k.hdr",
+          "media_type": "image/vnd.radiance",
+          "dimensions": [
+            1024,
+            512
+          ],
+          "projection": "equirectangular",
+          "sample_color_space": "linear_hdr",
+          "gpu_format_after_decode": "Rgba16Float_or_Rgba32Float",
+          "byte_length": 1724368,
+          "sha256": "d0b515b6741e44ceaa7dc2e42a64ec30f61871ae313762729c6a14f5343484f2"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_twilight_sunset",
+      "kind": "environment",
+      "title": "Twilight Sunset",
+      "source_page_url": "https://polyhaven.com/a/twilight_sunset",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Dimitrios Savva",
+          "role": "photography"
+        },
+        {
+          "name": "Jarod Guest",
+          "role": "processing"
+        }
+      ],
+      "environment_classes": [
+        "twilight",
+        "urban",
+        "suburban",
+        "partly_cloudy",
+        "low_contrast",
+        "natural_light"
+      ],
+      "files": [
+        {
+          "role": "equirectangular_environment",
+          "path": "environments/twilight_sunset_1k.hdr",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/twilight_sunset_1k.hdr",
+          "media_type": "image/vnd.radiance",
+          "dimensions": [
+            1024,
+            512
+          ],
+          "projection": "equirectangular",
+          "sample_color_space": "linear_hdr",
+          "gpu_format_after_decode": "Rgba16Float_or_Rgba32Float",
+          "byte_length": 1654094,
+          "sha256": "ecf14c0f2a3850e48f51dcf4fd601829f2511120fbea87b03fd039dd3b0d0937"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_dikhololo_sunset",
+      "kind": "environment",
+      "title": "Dikhololo Sunset",
+      "source_page_url": "https://polyhaven.com/a/dikhololo_sunset",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Greg Zaal",
+          "role": "author"
+        }
+      ],
+      "environment_classes": [
+        "twilight",
+        "natural",
+        "remote",
+        "roadside",
+        "partly_cloudy",
+        "low_contrast"
+      ],
+      "files": [
+        {
+          "role": "equirectangular_environment",
+          "path": "environments/dikhololo_sunset_1k.hdr",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/dikhololo_sunset_1k.hdr",
+          "media_type": "image/vnd.radiance",
+          "dimensions": [
+            1024,
+            512
+          ],
+          "projection": "equirectangular",
+          "sample_color_space": "linear_hdr",
+          "gpu_format_after_decode": "Rgba16Float_or_Rgba32Float",
+          "byte_length": 1443198,
+          "sha256": "e8d95ed7e1465d4598c8f977c14d131837a7f7714762c526b56f243dfbc76c45"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_modern_buildings_night",
+      "kind": "environment",
+      "title": "Modern Buildings Night",
+      "source_page_url": "https://polyhaven.com/a/modern_buildings_night",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Greg Zaal",
+          "role": "author"
+        }
+      ],
+      "environment_classes": [
+        "night",
+        "urban",
+        "artificial_light",
+        "high_contrast"
+      ],
+      "files": [
+        {
+          "role": "equirectangular_environment",
+          "path": "environments/modern_buildings_night_1k.hdr",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/modern_buildings_night_1k.hdr",
+          "media_type": "image/vnd.radiance",
+          "dimensions": [
+            1024,
+            512
+          ],
+          "projection": "equirectangular",
+          "sample_color_space": "linear_hdr",
+          "gpu_format_after_decode": "Rgba16Float_or_Rgba32Float",
+          "byte_length": 1655510,
+          "sha256": "a690048dcecabf5ed1ad773f7abdec7cce7b1fea4d89b17f054a18f3e0fa2919"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_goegap",
+      "kind": "environment",
+      "title": "Goegap",
+      "source_page_url": "https://polyhaven.com/a/goegap",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Greg Zaal",
+          "role": "author"
+        }
+      ],
+      "environment_classes": [
+        "day",
+        "natural",
+        "remote",
+        "desert",
+        "clear",
+        "high_contrast"
+      ],
+      "files": [
+        {
+          "role": "equirectangular_environment",
+          "path": "environments/goegap_1k.hdr",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/goegap_1k.hdr",
+          "media_type": "image/vnd.radiance",
+          "dimensions": [
+            1024,
+            512
+          ],
+          "projection": "equirectangular",
+          "sample_color_space": "linear_hdr",
+          "gpu_format_after_decode": "Rgba16Float_or_Rgba32Float",
+          "byte_length": 1361485,
+          "sha256": "56bb97ac7fcbfcbc91116adfb96e26b9da54475dabb7ec2c442f41bf99cda085"
+        }
+      ]
+    },
+    {
+      "id": "polyhaven_kloppenheim_02",
+      "kind": "environment",
+      "title": "Kloppenheim 02",
+      "source_page_url": "https://polyhaven.com/a/kloppenheim_02",
+      "license": "CC0-1.0",
+      "authors": [
+        {
+          "name": "Greg Zaal",
+          "role": "author"
+        }
+      ],
+      "environment_classes": [
+        "night",
+        "natural",
+        "remote",
+        "clear",
+        "moonlit",
+        "high_contrast"
+      ],
+      "files": [
+        {
+          "role": "equirectangular_environment",
+          "path": "environments/kloppenheim_02_1k.hdr",
+          "source_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_02_1k.hdr",
+          "media_type": "image/vnd.radiance",
+          "dimensions": [
+            1024,
+            512
+          ],
+          "projection": "equirectangular",
+          "sample_color_space": "linear_hdr",
+          "gpu_format_after_decode": "Rgba16Float_or_Rgba32Float",
+          "byte_length": 1740414,
+          "sha256": "04d23c6b243742b5046310b29211aec671d7a0570f3596e1a6b43e614c9acadf"
+        }
+      ]
+    }
+  ]
+}

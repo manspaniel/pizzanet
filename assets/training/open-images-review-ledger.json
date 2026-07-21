@@ -1,0 +1,1162 @@
+{
+  "schema_version": "roof-negative-visual-review/v1",
+  "dataset_id": "open-images-buildings-negative",
+  "ordered_image_ids_sha256": "sha256:c46c643a8149520bb16c4838bf5c9576dacf8ea8814ef496f19cc9e0aadc8eab",
+  "reviewed_record_count": 1161,
+  "reviewer": "Codex visual review of all 19 indexed contact pages",
+  "reviewed_at": "2026-07-21",
+  "rejections": [
+    {
+      "image_id": "c72e8433113af66f",
+      "reason": "interior"
+    },
+    {
+      "image_id": "d46ed93ec5041c0c",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "8939d97ebd793dd2",
+      "reason": "interior"
+    },
+    {
+      "image_id": "cb771ddc84036216",
+      "reason": "interior"
+    },
+    {
+      "image_id": "e0f234bc787af5d5",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "d957dc4bb8a60fbd",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "ac015c1a9db5fe6c",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "85c2467f3be29ea2",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "9ad4434acbec83ca",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "46e110eb8c572963",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "dc91dc35f77deacb",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "2b28df0026212bdb",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "797b3f0f59ad5f1c",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "06a334c8f983d73e",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "0c44911e6b2f48a1",
+      "reason": "interior"
+    },
+    {
+      "image_id": "6eef761429878717",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "19050851ee47654e",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "c23e48dde864fd54",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "795ceb98f059e7ca",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "38d60954765f7b4f",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "9ac6349938c19daa",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "db145f619d16ee75",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "58c3562313ace080",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "a707c3a72adfd9f6",
+      "reason": "interior"
+    },
+    {
+      "image_id": "67f2f1694b6a4ecf",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "127e3f5d73ce1c24",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "0c756c9366a8cb10",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "8dc99b138b0b8f4e",
+      "reason": "interior"
+    },
+    {
+      "image_id": "ac18f2609189ed0c",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "1d5404ccdc97ed71",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "c72db18c2c27486d",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "c8d52f73aa5519e4",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "93befee81854e200",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "4c77c9ef015b4788",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "59a9abf74e5b31a3",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "1777256e995e1ec6",
+      "reason": "interior"
+    },
+    {
+      "image_id": "2afaedc20f715c25",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "3fc0820f5c99a1a8",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "9c1cc45179a1aaba",
+      "reason": "interior"
+    },
+    {
+      "image_id": "a040394adf67e9a0",
+      "reason": "interior"
+    },
+    {
+      "image_id": "68888ebc8de0ee07",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "f9f539977bfea25e",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "72e7c4f384c49ce4",
+      "reason": "interior"
+    },
+    {
+      "image_id": "eeffc04e09ba17e2",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "25014a69ec7349fc",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "d7aea6048b28e29f",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "d01d43bf0d8dc8e5",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "a571f1124483b074",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "a4497efa6e10b093",
+      "reason": "interior"
+    },
+    {
+      "image_id": "81eca3732bcb4808",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "7b2ea8168adc7b05",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "dd8d7b3e7e0f84cb",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "7dc8447df855e81e",
+      "reason": "interior"
+    },
+    {
+      "image_id": "a316bf9eb85fb41a",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "7c7c0e2bb9ea0927",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "364feca69ac38dbe",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "04256099a6f9032f",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "d47bfc37d6ac5ae9",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "2f3e2cb599c43075",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "d52dcf9650c2154c",
+      "reason": "interior"
+    },
+    {
+      "image_id": "cb4f63bc21a6d04f",
+      "reason": "interior"
+    },
+    {
+      "image_id": "bd110920b718e0ee",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "b30e592f79e01744",
+      "reason": "interior"
+    },
+    {
+      "image_id": "c0429c0f2e191442",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "79b09f1821e48bd0",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "57772c5065be9e7f",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "9733ea3be904c0e5",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "c643263c50a7ad29",
+      "reason": "interior"
+    },
+    {
+      "image_id": "fcfbf498b9e7a759",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "943c93ba3d2cd2b0",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "9e6dcbec738debb7",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "13b5a989b449c5c4",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "97f809b25e8b434c",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "78d1dbb06197649d",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "8a01d74cbf72e782",
+      "reason": "interior"
+    },
+    {
+      "image_id": "360af9711cff32b1",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "b96cd8e4957146e1",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "ef9d7a63804f7aa6",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "13f20b706bfe7f41",
+      "reason": "interior"
+    },
+    {
+      "image_id": "3882bfcbabba3200",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "dd129ab17ac9a6ef",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "db9848b711c72bc5",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "2c61b27dc1b6ad2b",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "83dfc1a82c9f85e9",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "79a88682ed6b1706",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "f172a83198d21d73",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "94db5468c0d59311",
+      "reason": "interior"
+    },
+    {
+      "image_id": "1ab5db67d31e2038",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "e2dc4b35db0fedaa",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "063e31f11b35dd98",
+      "reason": "interior"
+    },
+    {
+      "image_id": "d8e633556b101a62",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "4e8a3deb19536f31",
+      "reason": "interior"
+    },
+    {
+      "image_id": "bc18be8d3bdf75cb",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "bc80d4fcae620e56",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "14bbb30e5c1c47c7",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "9f6c11b60796e451",
+      "reason": "interior"
+    },
+    {
+      "image_id": "3345a69be733d5f2",
+      "reason": "interior"
+    },
+    {
+      "image_id": "5f5f6c65e8abb49d",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "d9032b832491e0f3",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "f9c14bf0f33c544a",
+      "reason": "interior"
+    },
+    {
+      "image_id": "f65474c7f8384bd9",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "ed3909b123547b1e",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "85cdfe579ac7a09a",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "d9e57ee88aaba437",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "2901388af66a975b",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "c1204e824093e1d8",
+      "reason": "interior"
+    },
+    {
+      "image_id": "9e5f5be1e95cf0ef",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "54623bd47ed6d1e9",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "0df49be355be1f96",
+      "reason": "interior"
+    },
+    {
+      "image_id": "502b53b9477a5bea",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "3bedf03ab39cfe33",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "e0fa810ca638f02d",
+      "reason": "interior"
+    },
+    {
+      "image_id": "01439856e567bc4e",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "94dbe777139a920a",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "5c886f84adf4f876",
+      "reason": "interior"
+    },
+    {
+      "image_id": "be3f6cdb1f9353b3",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "ad5335a0d76606b9",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "54ecd2808967f80e",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "4a7c646e8a30a448",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "3fb69da2444aa5be",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "15e2134bf1363429",
+      "reason": "interior"
+    },
+    {
+      "image_id": "5ba9d1df23018e15",
+      "reason": "interior"
+    },
+    {
+      "image_id": "5339d7acea25b7ed",
+      "reason": "interior"
+    },
+    {
+      "image_id": "fe16ab47697df972",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "623a7c5b74e0e574",
+      "reason": "interior"
+    },
+    {
+      "image_id": "82eb1b7aa5f4f0a8",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "2b3f752d363cb02a",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "b21699fce2b4db1c",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "ebaaf7f42fbb8bbc",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "6fc39b758b4e6659",
+      "reason": "interior"
+    },
+    {
+      "image_id": "727d04bcd744222b",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "4f13a40b7f0fe5c3",
+      "reason": "interior"
+    },
+    {
+      "image_id": "8748e08a3fcf868d",
+      "reason": "interior"
+    },
+    {
+      "image_id": "f6f353e450e638c5",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "fe015853570aa536",
+      "reason": "interior"
+    },
+    {
+      "image_id": "2c2541c2b82f1c70",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "eb0f9fbe76bdc635",
+      "reason": "interior"
+    },
+    {
+      "image_id": "178eeaaa127945a4",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "34137d4450226799",
+      "reason": "interior"
+    },
+    {
+      "image_id": "5e0b53dc4f60ca33",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "fd5b87f80c170cec",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "00f3dbbbf5bdf2cf",
+      "reason": "interior"
+    },
+    {
+      "image_id": "17fdf4171ecfeb17",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "181c08b70d6f0421",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "c9968b93bc658603",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "9261dd04cd85adb5",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "f9f5a0da88fe6342",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "d9808517e1e4cea3",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "f3f430ff2128ba2e",
+      "reason": "interior"
+    },
+    {
+      "image_id": "c274e026ac907eb9",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "9b54d35ba554d4ba",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "ac8cd22259045ec4",
+      "reason": "interior"
+    },
+    {
+      "image_id": "cb3b765548ed5589",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "a09ff3a4b88d6f97",
+      "reason": "interior"
+    },
+    {
+      "image_id": "1326b7f63f97c3a4",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "a23e5cf055323737",
+      "reason": "interior"
+    },
+    {
+      "image_id": "1f8080f317918c0c",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "aed59fc1d72f575d",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "9dcea48255ac8ce5",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "e4c4f8d02aa7f8e0",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "6f3f5d36fa8793bc",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "d9108c89459d208e",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "c9f37c92d71b0d68",
+      "reason": "interior"
+    },
+    {
+      "image_id": "0f71470b9d22554e",
+      "reason": "interior"
+    },
+    {
+      "image_id": "0fa22c0df9c6f3c6",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "2644292432654db6",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "b0d789834babaea8",
+      "reason": "interior"
+    },
+    {
+      "image_id": "0a50911d08250183",
+      "reason": "interior"
+    },
+    {
+      "image_id": "1e0374023b28f12b",
+      "reason": "interior"
+    },
+    {
+      "image_id": "519a4fdbfd81d42a",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "2b844596f13b4c98",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "27a2bfe7924afa55",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "e78a42acf2fa26b4",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "03ff460545b92e53",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "f0e1f28fddf194bf",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "54acf151660036b3",
+      "reason": "interior"
+    },
+    {
+      "image_id": "121a9fe7c861c595",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "3476c411e42d86cf",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "9520a3996fd18cef",
+      "reason": "interior"
+    },
+    {
+      "image_id": "63b287894b384a34",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "851dc91c304f2eca",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "2c04b9817d3a1075",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "42a6138a298b3d77",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "b12a95fd50f31e4f",
+      "reason": "interior"
+    },
+    {
+      "image_id": "f2f0c6170f6935a7",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "6da3186a0daae102",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "baf3f4660a059677",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "78a19e84922b29c1",
+      "reason": "interior"
+    },
+    {
+      "image_id": "977437404a23e092",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "98fc5678bc6a942b",
+      "reason": "interior"
+    },
+    {
+      "image_id": "341d77a8f5bb354b",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "0caa8c505c01ce8b",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "e6218f8c372e0fe3",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "6884cc806a34f5f9",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "b098f4ce07bc4c60",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "b07675174ac53703",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "816ee0e2e43a1002",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "df6dd70f7cc1aee6",
+      "reason": "interior"
+    },
+    {
+      "image_id": "3eb1c4ece473dd4b",
+      "reason": "interior"
+    },
+    {
+      "image_id": "0fe73678341c5315",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "09b5c9a79c959dbc",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "fb4e60b5cee8b88e",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "8c9397cb1a3f4920",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "a384636fb92dec3b",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "2849c2cf943eb26e",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "678d8f787e832ca3",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "f5597e109787f191",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "920a783a272d5e48",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "eb7885c20b80c0f8",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "c99de50488916ffd",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "66ef4a8a4a84b9b3",
+      "reason": "interior"
+    },
+    {
+      "image_id": "c297395a6f0c9bc8",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "ee248bd9c09cba0c",
+      "reason": "interior"
+    },
+    {
+      "image_id": "a2e2c091e710b1a2",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "3e43ab0367fa65e0",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "a16a08b532c78f9e",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "00b4064b073e51f3",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "9a713a0bf9f0b54a",
+      "reason": "interior"
+    },
+    {
+      "image_id": "1fb73a012d2915d6",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "9ffa4417e3c2f93b",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "961ed4099789d6e4",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "0359a3a63c8a424b",
+      "reason": "interior"
+    },
+    {
+      "image_id": "621eace50f46488a",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "82dbc88ed48e47b8",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "279913896e33d7fd",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "7cf899888ac39dbe",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "351b5737a1ab2885",
+      "reason": "interior"
+    },
+    {
+      "image_id": "e18f8379d3e272b5",
+      "reason": "interior"
+    },
+    {
+      "image_id": "f39416610f017d26",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "07b93a41ce9b1893",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "6d57e6af3ceaa94b",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "d4c182b6392d39c0",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "31a369177c1f11ea",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "0433fe487a1775f1",
+      "reason": "interior"
+    },
+    {
+      "image_id": "7706e548ca151f37",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "d973115bbf22d5fa",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "5fcd6bb8005ce3ae",
+      "reason": "interior"
+    },
+    {
+      "image_id": "063842dba3fcd6e1",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "151ac0754da1da6d",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "4df1448703257ff0",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "14f3007674b36f65",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "0ce960b8d36cc629",
+      "reason": "interior"
+    },
+    {
+      "image_id": "d2292cec9ba33f63",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "bf4ae311970fabfb",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "9d69848590304a04",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "859dfc18978e1bf3",
+      "reason": "interior"
+    },
+    {
+      "image_id": "51968e261767baae",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "6be522cb86f1f3bf",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "07cc303794686d20",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "35e4af0afbc6303a",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "0e3877d298fdf27a",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "574332b069150a85",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "6dc9c50218de115b",
+      "reason": "interior"
+    },
+    {
+      "image_id": "236bfb9d94aa652f",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "5ee0a52202af7dfb",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "e701a578e836817c",
+      "reason": "interior"
+    },
+    {
+      "image_id": "0f5268b184ffcf29",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "aa7a512075856910",
+      "reason": "building_too_small_or_obscured"
+    },
+    {
+      "image_id": "b33d83b98487c63a",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "ff1ebaae4b5dc3af",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "23f90952a8569149",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "f4e417cac1f562c8",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "b8d46139ac7820c9",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "6ed3e3ebe9a5fde5",
+      "reason": "interior"
+    },
+    {
+      "image_id": "9a97d45def8a766d",
+      "reason": "interior"
+    },
+    {
+      "image_id": "8c441fe0003a0f95",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "2eeec709f51ecd0d",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "3d0a585b137e04b8",
+      "reason": "interior"
+    },
+    {
+      "image_id": "deca5d30d26fa340",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "4a8a66861e06950b",
+      "reason": "interior"
+    },
+    {
+      "image_id": "acff9c78f7679620",
+      "reason": "interior"
+    },
+    {
+      "image_id": "3b7f4c0f1d1838f5",
+      "reason": "interior"
+    },
+    {
+      "image_id": "b057eba0623952f3",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "920cdf2d9f5a8b82",
+      "reason": "interior"
+    },
+    {
+      "image_id": "fa8d6d40dac333ea",
+      "reason": "interior"
+    },
+    {
+      "image_id": "ef89c4635914ab92",
+      "reason": "interior"
+    },
+    {
+      "image_id": "a07f010a7f5fddc3",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "757907957c2118c8",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "4f22cae3d025891c",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "78056cff1972c7fb",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "ad23cd404aef4ccd",
+      "reason": "interior"
+    },
+    {
+      "image_id": "0c5458ea3583233b",
+      "reason": "interior"
+    },
+    {
+      "image_id": "3ab6a89665690034",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "6d507443740be438",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "1e31049b92896373",
+      "reason": "non_building"
+    },
+    {
+      "image_id": "eb297ce62f882402",
+      "reason": "ambiguous_or_unusable"
+    },
+    {
+      "image_id": "daf034b5dc4cbf57",
+      "reason": "non_ordinary_structure"
+    },
+    {
+      "image_id": "01a6c89f9885d483",
+      "reason": "building_too_small_or_obscured"
+    }
+  ]
+}

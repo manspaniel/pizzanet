@@ -1,0 +1,27 @@
+[package]
+name = "roof-train"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Burn trainer for one-frame retro roof detection"
+
+[dependencies]
+anyhow = "1.0.102"
+burn = { version = "0.21.0", default-features = false, features = ["std", "autodiff", "flex", "wgpu"] }
+clap = { version = "4.6.0", features = ["derive"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+rand = "0.9.2"
+rand_chacha = "0.9.0"
+rayon = "1.12.0"
+roof-geometry = { path = "../../crates/roof-geometry" }
+roof-fit = { path = "../../crates/roof-fit" }
+roof-model = { path = "../../crates/roof-model", features = ["pretrained"] }
+roof-training = { path = "../../crates/roof-training" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+synth-data = { path = "../../crates/synth-data" }
+tar = "0.4.44"
+
+[lints]
+workspace = true

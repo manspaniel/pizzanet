@@ -1,0 +1,24 @@
+[package]
+name = "synth-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Native offscreen WGPU renderer for Pizza Hut roof training data"
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+glam = { version = "0.33.0", features = ["bytemuck", "serde"] }
+half = "2.7.1"
+roof-geometry = { path = "../roof-geometry" }
+serde = { version = "1.0.228", features = ["derive"] }
+synth-data = { path = "../synth-data" }
+thiserror = "2.0.18"
+wgpu = "30.0.0"
+
+[dev-dependencies]
+naga = { version = "30.0.0", features = ["wgsl-in"] }
+pollster = "0.4.0"
+
+[lints]
+workspace = true

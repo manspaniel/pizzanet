@@ -1,0 +1,17 @@
+[package]
+name = "vio-replay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic offline IMU simulation and VIO preintegration diagnostics"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.0", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+vio-core = { path = "../../crates/vio-core" }
+
+[lints]
+workspace = true

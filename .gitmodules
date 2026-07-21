@@ -1,0 +1,21 @@
+[submodule "references/8thwall"]
+	path = references/8thwall
+	url = https://github.com/8thwall/8thwall.git
+[submodule "references/8thwall-old"]
+	path = references/8thwall-old
+	url = https://github.com/8thwall/web.git
+[submodule "references/aframe-image-targets-example"]
+	path = references/aframe-image-targets-example
+	url = https://github.com/8thwall/aframe-image-targets-example.git
+[submodule "references/burn"]
+	path = references/burn
+	url = https://github.com/tracel-ai/burn.git
+[submodule "references/threejs-world-effects-example"]
+	path = references/threejs-world-effects-example
+	url = https://github.com/8thwall/threejs-world-effects-example
+[submodule "references/visloc-rs"]
+	path = references/visloc-rs
+	url = https://github.com/rsasaki0109/visloc-rs.git
+[submodule "references/burn-models"]
+	path = references/burn-models
+	url = https://github.com/tracel-ai/models.git

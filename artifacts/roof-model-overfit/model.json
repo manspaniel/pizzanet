@@ -1,0 +1,30 @@
+{
+  "schema_version": "roof-keypoint-model/v3",
+  "checkpoint": "model.mpk",
+  "input_size": 256,
+  "heatmap_size": 64,
+  "keypoint_count": 12,
+  "recommended_presence_threshold": 0.9953833,
+  "recommended_offscreen_threshold": 0.5,
+  "recommended_keypoint_threshold": 0.15,
+  "shape_prior": {
+    "mean": [
+      0.76208943,
+      0.5288345,
+      0.45383787,
+      0.8627577,
+      0.7656385,
+      0.10261706,
+      0.10926519
+    ],
+    "standard_deviation": [
+      0.1126355,
+      0.04618172,
+      0.0413824,
+      0.034098327,
+      0.047737688,
+      0.01785928,
+      0.025552133
+    ]
+  }
+}

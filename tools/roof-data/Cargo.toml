@@ -1,0 +1,24 @@
+[package]
+name = "roof-data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source and curate real imagery for roof-model training"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.0", features = ["derive"] }
+csv = "1.4.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+rayon = "1.11.0"
+reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "gzip", "http2", "query", "rustls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+
+[dev-dependencies]
+tempfile = "3.24.0"
+
+[lints]
+workspace = true

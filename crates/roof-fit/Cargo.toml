@@ -1,0 +1,17 @@
+[package]
+name = "roof-fit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Constraint-based fitting of the parametric Pizza Hut roof"
+
+[dependencies]
+levenberg-marquardt = "0.15.0"
+nalgebra = "0.34.2"
+roof-geometry = { path = "../roof-geometry" }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+
+[lints]
+workspace = true

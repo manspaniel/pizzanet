@@ -1,0 +1,17 @@
+.DS_Store
+target/
+app/node_modules/
+app/dist/
+datasets/
+artifacts/*
+!artifacts/roof-model-overfit/
+artifacts/roof-model-overfit/*
+!artifacts/roof-model-overfit/model.mpk
+!artifacts/roof-model-overfit/model.json
+!artifacts/roof-model-overfit/final-metrics.json
+!artifacts/roof-model-overfit/metrics.jsonl
+!artifacts/roof-model-overfit/training-config.json
+samples/synthetic-generated/
+*.tar
+*.tar.zst
+*.wgpu-trace/

@@ -151,7 +151,7 @@ Train the detector to recognize geometry rather than “a big red roof”. Inclu
 - Wet roofs and specular highlights.
 - Snow, faded paint and roofs repainted another colour.
 - Partial occlusion by trees, signs and power lines.
-- Hard negatives such as mansard roofs, ordinary hipped roofs, red petrol-station roofs and modern Pizza Hut buildings without the legacy roof.
+- Hard negatives drawn from ordinary houses and unrelated buildings, including mansard roofs, ordinary hipped roofs, flat-roofed commercial buildings and petrol-station canopies.
 
 Synthetic training data would be particularly effective here. Build a parameterized 3D roof once, render thousands of camera angles with randomized materials, lighting, backgrounds and occluders, and then fine-tune on real photographs. The synthetic renders give you exact landmark, mask, pose and geometry labels essentially for free.
 

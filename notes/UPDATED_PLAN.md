@@ -1,5 +1,9 @@
 # Retro Pizza Hut Roof AR: Implementation Plan
 
+> Current implementation status, the stopped full-corpus run, Linux/RTX setup,
+> and the corrected still-image execution plan are consolidated in
+> [`HANDOFF.md`](../HANDOFF.md).
+
 ## Goal
 
 Build a browser-based AR experience that recognises the classic Pizza Hut roof, tracks the user's camera as they move around a building, fits a simplified roof mesh to the observations, and renders a stable overlay.
@@ -101,23 +105,107 @@ The tracker exposes useful states such as initialising, tracking, limited, reloc
 
 ## Roof recognition
 
-Recognition is structural rather than colour-dependent. The model runs in two passes:
+Recognition is structural rather than colour-dependent. The implemented
+still-image model makes one 256×256 full-frame pass and produces exactly the
+evidence the constrained fitter needs:
 
-1. A low-resolution full-frame model finds likely roof regions.
-2. A higher-resolution ROI model extracts the evidence needed for fitting.
+- One global roof-presence logit.
+- Twelve 64×64 amodal keypoint distributions, grouped into four eave, four
+  shoulder, and four crown corners.
+- One offscreen token per keypoint.
 
-The ROI model produces:
+The keypoints provide image location and extent, so a separate box or centre
+head is unnecessary. The model does not predict masks, edges, or roof
+parameters. Synthetic keypoints target small spatial probability distributions;
+the loss considers all eight cyclic/reflected correspondences and applies one
+selected correspondence to all three rings. This avoids arbitrary front-left
+labels on a symmetric roof. Real Pizza Hut photographs provide presence
+supervision and domain grounding, while exact geometry comes from the renderer.
+Presence examples are balanced by source within each batch.
 
-- Roof and roof-part masks.
-- Structural keypoints with visibility and uncertainty.
-- Ridge, eave, valley, crown, and silhouette edges.
-- Roof-face identity and normalised face coordinates.
-- Prototype or variant likelihood.
-- Reject, truncation, blur, and coverage scores.
+The executable training sequence is concrete: first generate 32 target and 32
+ordinary-building scenes and run `roof-train --overfit`; then generate 6,000 +
+6,000 independently sampled buildings and train the complete corpus. Training
+always writes a best candidate, but only a candidate that passes the recorded
+presence, held-out real-photo recall, separate synthetic/real specificity,
+keypoint, offscreen, and perspective-fit gates is promoted
+to the `model.mpk` path used by `roof-detect`. The strict 32+32 memorisation gate
+has passed on both standard WGPU and Flex with 1.000 recall/specificity,
+PCK@3% 0.9803371, PCK@5% 0.98595506, 1.000 offscreen accuracy, and no collapsed
+pairs after backend autotune was removed from the portable path. It remains a
+diagnostic checkpoint rather than the production model. The Mac full-corpus
+run was stopped after epoch 4 and was not promoted. Its keypoint accuracy was
+improving, but roof-presence specificity had collapsed; the exact results and
+required Linux-side diagnosis are recorded in [`HANDOFF.md`](../HANDOFF.md).
 
-Training data should aggressively vary roof colour, repainting, weathering, materials, lighting, occlusion, signs, extensions, and surrounding architecture. It should include many hard negatives such as ordinary hip roofs, mansards, petrol stations, other restaurant roofs, and heavily altered former Pizza Huts.
+Training data should aggressively vary roof colour, repainting, weathering,
+materials, lighting, occlusion, signs, extensions, and surrounding
+architecture. The current corpus contains 12,000 independent one-view
+buildings: 6,000 targets and 6,000 ordinary negatives, split into 9,619 train,
+1,152 validation, and 1,229 test frames. For each class, the complete corpus is
+exactly 2,000 urban, 2,000 suburban, and 2,000 remote examples; this is an
+overall guarantee, not a per-split guarantee, because splits are assigned by a
+stable building hash. Across both classes, 6,208 buildings have no addition,
+5,073 have one, and 719 have two, using class-independent dining wings,
+entrance vestibules, and service annexes with flat or shed roofs. Current and
+former Pizza Hut buildings remain positive examples whenever the recognisable
+two-tier roof form survives, regardless of branding or condition. The negative
+corpus consists of ordinary houses and unrelated residential, commercial,
+civic, and industrial buildings across the same camera, lighting, weather,
+distance, and occlusion distribution. Current and former Pizza Hut locations
+are not deliberately included as negatives.
 
-The existing [recognition research](./CHATGPT_RESEARCH.md) remains a useful source for the model and dataset details. The complete offline generation pipeline, render passes, annotation schema, storage format, and validation rules are specified in the [synthetic training data plan](./SYNTHETIC_TRAINING_DATA.md).
+Full-model promotion requires test recall at least 0.95, held-out real-photo
+recall at least 0.80, overall specificity at least 0.90, curated-real-negative
+specificity at least 0.85, PCK@5% and offscreen accuracy at least 0.90,
+synthetic fit success and accepted-fit coverage at least 0.90, median fitted
+mesh RMSE no more than 0.03 of the image diagonal, and median amodal silhouette
+IoU at least 0.80. Validation real-photo recall must also reach 0.80 when
+present. These gates, rather than the existence of a candidate file, decide
+whether `roof-detect` may use a checkpoint by default.
+
+The existing [recognition research](./CHATGPT_RESEARCH.md) remains a useful source for the model and dataset details. The complete offline generation pipeline, render passes, annotation schema, storage format, and validation rules are specified in the [synthetic training data plan](./SYNTHETIC_TRAINING_DATA.md). The [reference-image calibration](./REFERENCE_IMAGE_CALIBRATION.md) records how the full local photograph set maps to correlated roof morphology and appearance distributions.
+
+The implemented generator, exact training commands, checkpoint-promotion rules,
+and playable native overlay CLI are recorded in
+[roof training and single-frame inference](./TRAINING_AND_INFERENCE.md).
+
+### Single-frame detector CLI
+
+A native Rust CLI provides a visible end-to-end test of the visual detection path:
+
+```sh
+cargo run -p roof-detect -- building.jpg --output building-overlay.png --json building-detection.json
+```
+
+The normal command accepts only the source image. Burn decodes roof presence and
+12 amodal structural observations. The portable `roof-fit` crate evaluates all
+eight roof correspondences and robustly estimates seven scale-free roof ratios,
+camera rotation and translation, and focal length with a pinhole camera. EXIF
+focal information is used when available; otherwise several field-of-view
+hypotheses are tried. `roof-geometry` then generates the complete two-tier mesh,
+including obscured geometry. The JSON records learned observations, inferred
+parameters, perspective camera, projected mesh, bounds, reprojection error, and
+fit confidence. `--raw-keypoint-debug` exposes the learned points for diagnosis.
+Parameters and camera remain outputs; the user never supplies them.
+
+The single-frame fitter requires at least six usable points and rejects a
+confident fit when normalized reprojection RMSE exceeds 0.05 or fewer than two
+thirds of the observations are inliers. The ordinary CLI therefore does not
+draw a confident mesh when the visual evidence is insufficient or
+geometrically inconsistent.
+
+A still image cannot exercise IMU fusion or multi-frame SLAM. The CLI
+deliberately simulates one camera frame: it proves visual recognition,
+perspective fitting, complete parametric mesh generation, and overlay rendering.
+Live capture later attaches these observations to tracked camera poses so the
+trajectory and roof geometry become more stable as the user moves.
+
+After a full checkpoint is promoted, a fixed contact sheet over all 18
+untouched `samples/` photographs provides qualitative acceptance: at least 80%
+detection recall and plausible placement of both roof tiers on at least 70%.
+These images never participate in training or threshold selection. The curated
+real-negative test split separately permits no more than 15% false positives.
 
 ## Multi-view roof fitting
 
@@ -135,9 +223,6 @@ The roof is represented by a small family of watertight, piecewise-planar parame
 The fitter keeps several plausible front/back and variant hypotheses until the views distinguish them. It optimises one shared roof mesh against all accepted observations using:
 
 - Keypoint reprojection.
-- Face-coordinate reprojection.
-- Silhouette alignment.
-- Structural-edge distance and orientation.
 - Gravity and vertical constraints.
 - Camera-pose and observation confidence.
 - Loose priors on recognisable Pizza Hut roof proportions.
@@ -172,7 +257,7 @@ Three.js rendering and recognition are independent camera consumers.
 
 - Prefer a CSS `<video>` camera layer behind a transparent Three.js canvas. This avoids uploading camera pixels into Three.js merely to display them.
 - The SLAM worker consumes downscaled luma at camera cadence.
-- The Burn worker consumes selected RGB frames or ROIs, owns its own WGPU device, and returns compact roof observations.
+- The Burn worker consumes selected RGB frames, owns its own WGPU device, and returns compact roof observations.
 - Recognition runs with one frame in flight and drops stale requests rather than building a queue.
 - The renderer reads the latest predicted camera pose and the latest accepted mesh state.
 
@@ -208,7 +293,7 @@ These workstreams make up the complete system; the numbering describes integrati
 
 1. **Capture and replay:** implement permission flow, camera and sensor collection, immutable frame records, timestamp alignment, recording, and deterministic replay.
 2. **Visual-inertial tracking:** implement the visual front end, IMU preintegration, initialisation, fixed-lag optimisation, mapping, relocalisation, and display-time prediction.
-3. **Recognition pipeline:** implement the [synthetic training data generator](./SYNTHETIC_TRAINING_DATA.md), training-data format, full-frame locator, ROI model, Burn export, backend selection, and inference worker.
+3. **Recognition pipeline:** generate and validate the balanced synthetic corpus, pass the explicit 32+32 overfit gate, train and promote the full-frame Burn keypoint model, then integrate backend selection and the inference worker.
 4. **Parametric roof system:** implement roof variants, observation decoding, hypothesis generation, multi-view fitting, uncertainty, and mesh output.
 5. **Guidance and state:** connect estimator and fitter uncertainty to camera-motion prompts, coverage feedback, recovery, and lock/unlock behaviour.
 6. **Three.js integration:** render the camera presentation, tracking guidance, diagnostic overlays, and smoothed roof mesh without coupling rendering to inference.

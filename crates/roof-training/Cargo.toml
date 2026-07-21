@@ -1,0 +1,16 @@
+[package]
+name = "roof-training"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sparse keypoint target construction for Pizza Hut roof training"
+
+[dependencies]
+roof-geometry = { path = "../roof-geometry" }
+roof-model = { path = "../roof-model" }
+synth-data = { path = "../synth-data" }
+thiserror = "2.0.18"
+
+[lints]
+workspace = true
