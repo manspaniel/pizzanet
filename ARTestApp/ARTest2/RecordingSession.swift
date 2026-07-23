@@ -357,17 +357,18 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
             ])
         )
 
-        // W3C deviceorientation from the attitude rotation matrix (device ->
-        // earth, Z vertical, X arbitrary), decomposed as Rz(a)·Rx(b)·Ry(g):
-        //   b = asin(m32), a = atan2(-m12, m22), g = atan2(-m31, m33)
-        // Sanity anchor: a phone held upright in portrait must give beta ~ 90.
-        // If it reads ~0, CMRotationMatrix is the transpose of this
-        // assumption — swap the off-diagonal indices.
+        // W3C deviceorientation from the attitude matrix. CMRotationMatrix is
+        // reference->device (verified against ARKit ground truth: with the
+        // transposed elements below, the synthesized orientation tracks ARKit
+        // to within a few degrees; the untransposed variant wanders 180°), so
+        // the device->earth matrix is its transpose. Decomposing
+        // transpose(m) = Rz(a)·Rx(b)·Ry(g):
+        //   b = asin(m23), a = atan2(-m21, m22), g = atan2(-m13, m33)
         let m = motion.attitude.rotationMatrix
-        let beta = asin(max(-1.0, min(1.0, m.m32))) * degreesPerRadian
-        var alpha = atan2(-m.m12, m.m22) * degreesPerRadian
+        let beta = asin(max(-1.0, min(1.0, m.m23))) * degreesPerRadian
+        var alpha = atan2(-m.m21, m.m22) * degreesPerRadian
         if alpha < 0 { alpha += 360.0 }
-        let gamma = atan2(-m.m31, m.m33) * degreesPerRadian
+        let gamma = atan2(-m.m13, m.m33) * degreesPerRadian
         sensorEventLines.append(
             jsonLine([
                 "kind": "device_orientation",
