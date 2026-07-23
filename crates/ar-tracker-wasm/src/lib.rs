@@ -1111,7 +1111,18 @@ impl ArTracker {
     /// the first confident estimate is applied in full (initialization), later
     /// ones as small bounded steps so the world never visibly breathes.
     fn update_metric_scale(&mut self) {
-        let Some(estimate) = scale::estimate_scale(&self.map) else {
+        let estimate = scale::estimate_scale(&self.map);
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::env::var_os("AR_DEBUG_SCALE").is_some() {
+            match &estimate {
+                Some(estimate) => eprintln!(
+                    "scale-debug ratio={:.3} excitation={:.2} pairs={} initialized={}",
+                    estimate.ratio, estimate.excitation, estimate.pairs, self.scale_initialized
+                ),
+                None => eprintln!("scale-debug unobservable (kf={})", self.map.keyframes.len()),
+            }
+        }
+        let Some(estimate) = estimate else {
             return;
         };
         self.latest_scale_ratio = estimate.ratio;

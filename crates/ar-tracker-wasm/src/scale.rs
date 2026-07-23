@@ -66,6 +66,24 @@ pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
         ));
     }
     pairs.reverse();
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var_os("AR_DEBUG_SCALE").is_some() {
+        let with_preint = map
+            .keyframes
+            .iter()
+            .filter(|keyframe| keyframe.preintegration.is_some())
+            .count();
+        let span: f64 = pairs.iter().map(|(_, dt, _, _)| dt).sum();
+        let excitation: f64 = pairs.iter().map(|(_, _, dv, _)| dv.length()).sum();
+        eprintln!(
+            "scale-chain pairs={} kf_with_preint={}/{} span={:.2}s excitation={:.2}",
+            pairs.len(),
+            with_preint,
+            map.keyframes.len(),
+            span,
+            excitation
+        );
+    }
     if pairs.len() < MIN_PAIRS {
         return None;
     }
@@ -97,7 +115,18 @@ pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
         }
         velocity_prefix += *delta_velocity;
     }
-    let solution = solve_4x4(normal, rhs)?;
+    let solution = solve_4x4(normal, rhs);
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var_os("AR_DEBUG_SCALE").is_some() {
+        match &solution {
+            Some(x) => eprintln!(
+                "scale-solve ratio={:.4} v0=({:.2},{:.2},{:.2})",
+                x[0], x[1], x[2], x[3]
+            ),
+            None => eprintln!("scale-solve singular"),
+        }
+    }
+    let solution = solution?;
     let ratio = solution[0];
     if !ratio.is_finite() || !(MIN_RATIO..=MAX_RATIO).contains(&ratio) {
         return None;

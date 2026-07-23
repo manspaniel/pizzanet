@@ -338,10 +338,12 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         }
         let recordingTimeMilliseconds = (motion.timestamp - startUptimeSeconds) * 1000.0
 
-        // Safari on iOS reports the NEGATED spec values (the long-standing
-        // WebKit sign inversion the web pipeline already corrects for):
-        //   acceleration                 = -9.81 * userAcceleration
-        //   accelerationIncludingGravity =  9.81 * (gravity - userAcceleration)
+        // Safari-convention values, verified empirically against ARKit ground
+        // truth (integrated dv correlates 0.98 with ARKit velocity):
+        // CMDeviceMotion.userAcceleration uses the accelerometer sign
+        // convention, so the user term ADDS to gravity here.
+        //   acceleration                 =  9.81 * userAcceleration
+        //   accelerationIncludingGravity =  9.81 * (gravity + userAcceleration)
         let user = motion.userAcceleration
         let gravity = motion.gravity
         sensorEventLines.append(
@@ -351,14 +353,14 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
                 "receiptTimestampMilliseconds": eventTimestampMilliseconds,
                 "recordingTimeMilliseconds": recordingTimeMilliseconds,
                 "acceleration": [
-                    "x": -gravityConstant * user.x,
-                    "y": -gravityConstant * user.y,
-                    "z": -gravityConstant * user.z,
+                    "x": gravityConstant * user.x,
+                    "y": gravityConstant * user.y,
+                    "z": gravityConstant * user.z,
                 ],
                 "accelerationIncludingGravity": [
-                    "x": gravityConstant * (gravity.x - user.x),
-                    "y": gravityConstant * (gravity.y - user.y),
-                    "z": gravityConstant * (gravity.z - user.z),
+                    "x": gravityConstant * (gravity.x + user.x),
+                    "y": gravityConstant * (gravity.y + user.y),
+                    "z": gravityConstant * (gravity.z + user.z),
                 ],
                 // Safari's iOS rotationRate quirk: alpha/beta/gamma carry the
                 // device x/y/z rates (deg/s).
