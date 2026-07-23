@@ -77,6 +77,9 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
     }
 
     var onUpdate: (@Sendable (Update) -> Void)?
+    /// Fed every throttled frame (recording or not) for the webview bridge:
+    /// (frameId, timestampMilliseconds, width, height, base64Luma).
+    var onLumaFrame: (@Sendable (UInt32, Double, Int, Int, String) -> Void)?
 
     private let motionManager = CMMotionManager()
     private let motionQueue = OperationQueue()
@@ -189,7 +192,7 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         }
 
         lock.lock()
-        guard isRecording, frame.timestamp >= nextFrameAtSeconds else {
+        guard frame.timestamp >= nextFrameAtSeconds else {
             lock.unlock()
             onUpdate?(Update(trackingState: trackingLabel))
             return
@@ -205,6 +208,16 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
             targetWidth: Self.trackerFrameWidth
         ) else {
             lock.unlock()
+            return
+        }
+        let feedFrameId = nextFrameId
+        guard isRecording else {
+            lock.unlock()
+            onLumaFrame?(
+                feedFrameId, eventTimestampMilliseconds, width, height,
+                luma.base64EncodedString()
+            )
+            onUpdate?(Update(trackingState: trackingLabel))
             return
         }
         if trackerFrameHeight == 0 {
@@ -254,6 +267,10 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         )
         lock.unlock()
 
+        onLumaFrame?(
+            frameId, eventTimestampMilliseconds, width, height,
+            luma.base64EncodedString()
+        )
         onUpdate?(Update(frameCount: frames, trackingState: trackingLabel))
     }
 

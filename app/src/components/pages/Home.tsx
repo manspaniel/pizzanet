@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { FallbackArSession, preloadFallbackTracker } from "../../ar/FallbackArSession";
 import { secureContextMessage, supportsImmersiveAr } from "../../ar/capabilities";
+import { isNativeCameraMode } from "../../ar/nativeCameraMode";
 import type { ArSessionController, ArStatus, TrackerDebugSettings } from "../../ar/types";
 import { defaultTrackerDebugSettings } from "../../ar/types";
 import { WebXrArSession } from "../../ar/WebXrArSession";
 import { ArDebugPanel } from "../ArDebugPanel";
+
+// Native-camera mode: the page runs in a WKWebView above a native ARKit camera
+// view that pushes frames in; there is no camera access and the page renders
+// with a transparent background.
+const nativeCamera = isNativeCameraMode();
 
 type ExperienceState = "checking" | "idle" | "starting" | "running" | "error";
 type RecordingState = "idle" | "recording" | "uploading" | "uploaded" | "error";
@@ -53,19 +59,27 @@ export function Home() {
   const [debugSettings, setDebugSettings] = useState<TrackerDebugSettings>(
     defaultTrackerDebugSettings,
   );
-  const secureMessage = secureContextMessage();
+  // Camera and WebXR capability checks do not apply in native-camera mode:
+  // the native host owns the camera and pushes frames into the page.
+  const secureMessage = nativeCamera ? null : secureContextMessage();
 
   useEffect(() => {
     let active = true;
     preloadFallbackTracker();
-    void supportsImmersiveAr().then((supported) => {
-      if (active) {
-        setWebXrAvailable(supported);
-        setExperienceState("idle");
-      }
-    });
+    if (nativeCamera) {
+      document.documentElement.classList.add("native-camera-mode");
+      setExperienceState("idle");
+    } else {
+      void supportsImmersiveAr().then((supported) => {
+        if (active) {
+          setWebXrAvailable(supported);
+          setExperienceState("idle");
+        }
+      });
+    }
     return () => {
       active = false;
+      document.documentElement.classList.remove("native-camera-mode");
       void sessionRef.current?.stop();
       sessionRef.current = null;
     };
@@ -85,7 +99,7 @@ export function Home() {
     const overlay = overlayRef.current;
     const pointOverlay = pointOverlayRef.current;
     const video = videoRef.current;
-    if (!canvas || !overlay || !pointOverlay || !video) {
+    if (!canvas || !overlay || !pointOverlay || (!nativeCamera && !video)) {
       return;
     }
 
@@ -93,9 +107,10 @@ export function Home() {
     setRecordingMessage(null);
     setRecordingState("idle");
     setExperienceState("starting");
-    const session = webXrAvailable
-      ? new WebXrArSession(canvas, overlay, setStatus)
-      : new FallbackArSession(video, canvas, pointOverlay, setStatus, debugSettings);
+    const session =
+      !nativeCamera && webXrAvailable
+        ? new WebXrArSession(canvas, overlay, setStatus)
+        : new FallbackArSession(video, canvas, pointOverlay, setStatus, debugSettings);
     sessionRef.current = session;
 
     try {
@@ -161,11 +176,13 @@ export function Home() {
 
   return (
     <main className="experience-shell">
-      <video
-        ref={videoRef}
-        aria-hidden="true"
-        className={`camera-feed ${isWasmSession && isRunning ? "is-visible" : ""}`}
-      />
+      {!nativeCamera && (
+        <video
+          ref={videoRef}
+          aria-hidden="true"
+          className={`camera-feed ${isWasmSession && isRunning ? "is-visible" : ""}`}
+        />
+      )}
       <canvas ref={canvasRef} className="ar-canvas" />
       <canvas
         ref={pointOverlayRef}
@@ -184,9 +201,11 @@ export function Home() {
             <p className="capability-line">
               {experienceState === "checking"
                 ? "Checking spatial tracking…"
-                : webXrAvailable
-                  ? "WebXR spatial tracking available"
-                  : "Rust/WASM camera + motion fallback"}
+                : nativeCamera
+                  ? "Native ARKit camera bridge"
+                  : webXrAvailable
+                    ? "WebXR spatial tracking available"
+                    : "Rust/WASM camera + motion fallback"}
             </p>
             {secureMessage && <p className="notice notice-warning">{secureMessage}</p>}
             {error && <p className="notice notice-error">{error}</p>}
@@ -209,26 +228,31 @@ export function Home() {
                 <span>{status.backend === "webxr" ? "WebXR 6DoF" : "Rust/WASM"}</span>
               </div>
               <div className="status-actions">
-                {canRecord && (
-                  <button
-                    type="button"
-                    className={`icon-button ${recordingState === "recording" ? "is-recording" : ""}`}
-                    disabled={recordingState === "uploading"}
-                    onClick={() =>
-                      recordingState === "recording" || recordingState === "error"
-                        ? void finishRecording()
-                        : startRecording()
-                    }
-                  >
-                    {recordingState === "recording"
-                      ? "Done"
-                      : recordingState === "uploading"
-                        ? "Uploading…"
-                        : recordingState === "error"
-                          ? "Retry upload"
-                          : "Record"}
-                  </button>
-                )}
+                {canRecord &&
+                  (nativeCamera ? (
+                    <button type="button" className="icon-button" disabled>
+                      rec n/a (native)
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className={`icon-button ${recordingState === "recording" ? "is-recording" : ""}`}
+                      disabled={recordingState === "uploading"}
+                      onClick={() =>
+                        recordingState === "recording" || recordingState === "error"
+                          ? void finishRecording()
+                          : startRecording()
+                      }
+                    >
+                      {recordingState === "recording"
+                        ? "Done"
+                        : recordingState === "uploading"
+                          ? "Uploading…"
+                          : recordingState === "error"
+                            ? "Retry upload"
+                            : "Record"}
+                    </button>
+                  ))}
                 <button
                   className="icon-button"
                   type="button"
@@ -253,6 +277,7 @@ export function Home() {
 
             {isWasmSession && (
               <ArDebugPanel
+                nativeCamera={nativeCamera}
                 onChange={updateDebugSettings}
                 settings={debugSettings}
                 status={status}

@@ -10,12 +10,20 @@ const trackerFrameWidthOptions: TrackerFrameWidth[] = [160, 240, 320];
 const captureRateOptions: CaptureRateHz[] = [10, 20, 30];
 
 interface ArDebugPanelProps {
+  /** Frames come pre-sized and pre-throttled from the native ARKit host, so
+   * the resolution and capture-rate controls do not apply. */
+  nativeCamera?: boolean;
   onChange: (partial: Partial<TrackerDebugSettings>) => void;
   settings: TrackerDebugSettings;
   status: ArStatus;
 }
 
-export function ArDebugPanel({ onChange, settings, status }: ArDebugPanelProps) {
+export function ArDebugPanel({
+  nativeCamera = false,
+  onChange,
+  settings,
+  status,
+}: ArDebugPanelProps) {
   const [expanded, setExpanded] = useState(import.meta.env.DEV);
 
   return (
@@ -76,6 +84,7 @@ export function ArDebugPanel({ onChange, settings, status }: ArDebugPanelProps) 
             <label>
               res{" "}
               <select
+                disabled={nativeCamera}
                 value={settings.trackerFrameWidth}
                 onChange={(event) =>
                   onChange({
@@ -93,6 +102,7 @@ export function ArDebugPanel({ onChange, settings, status }: ArDebugPanelProps) 
             <label>
               rate{" "}
               <select
+                disabled={nativeCamera}
                 value={settings.captureRateHz}
                 onChange={(event) =>
                   onChange({

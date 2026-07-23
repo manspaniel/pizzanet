@@ -1,6 +1,7 @@
 import type { ArTracker } from "../generated/ar-tracker-wasm/ar_tracker_wasm";
 import { requestMotionPermissions } from "./capabilities";
 import { DevRecording } from "./DevRecording";
+import { isNativeCameraMode } from "./nativeCameraMode";
 import { ThreeArScene } from "./ThreeArScene";
 import type {
   ArSessionController,
@@ -97,9 +98,10 @@ export class FallbackArSession implements ArSessionController {
   private tracker: ArTracker | null = null;
   private videoFrameCallback = 0;
   private readonly canvas: HTMLCanvasElement;
+  private readonly nativeMode = isNativeCameraMode();
   private readonly onStatus: (status: ArStatus) => void;
   private readonly pointOverlayCanvas: HTMLCanvasElement;
-  private readonly video: HTMLVideoElement;
+  private readonly video: HTMLVideoElement | null;
 
   private readonly onDeviceMotion = (event: DeviceMotionEvent) => {
     const receiptTimestampMilliseconds = performance.now();
@@ -182,7 +184,7 @@ export class FallbackArSession implements ArSessionController {
     _nowMilliseconds: DOMHighResTimeStamp,
     metadata: VideoFrameCallbackMetadata,
   ) => {
-    if (!this.running) {
+    if (!this.running || !this.video) {
       this.videoFrameCallback = 0;
       return;
     }
@@ -205,8 +207,51 @@ export class FallbackArSession implements ArSessionController {
     }
   };
 
+  /**
+   * Bridge entry point for native-camera mode. The native ARKit host pushes
+   * already-downscaled grayscale frames (throttled to 30 Hz on the native
+   * side), so every call is processed. Frames are stamped with
+   * `performance.now()` at receipt: the native clock has a different base, and
+   * receipt time keeps frames on the same clock as the page's real
+   * devicemotion/deviceorientation events, which keep feeding the tracker
+   * exactly as in camera mode.
+   */
+  private readonly onNativeFrame = (
+    frameId: number,
+    _nativeTimestampMilliseconds: number,
+    width: number,
+    height: number,
+    base64Luma: string,
+  ): void => {
+    const receiptTimestampMilliseconds = performance.now();
+    if (!this.running || !this.tracker || width <= 0 || height <= 0) {
+      return;
+    }
+    const luma = Uint8Array.from(atob(base64Luma), (character) =>
+      character.charCodeAt(0),
+    );
+    if (luma.length < width * height) {
+      return;
+    }
+    if (width !== this.frameWidth || height !== this.frameHeight) {
+      this.frameWidth = width;
+      this.frameHeight = height;
+      this.configureSceneProjection();
+    }
+    this.tracker.push_luma_frame(
+      frameId,
+      receiptTimestampMilliseconds,
+      width,
+      height,
+      luma,
+    );
+    if (this.debugSettings.pointOverlayEnabled) {
+      this.drawTrackedPoints();
+    }
+  };
+
   constructor(
-    video: HTMLVideoElement,
+    video: HTMLVideoElement | null,
     canvas: HTMLCanvasElement,
     pointOverlayCanvas: HTMLCanvasElement,
     onStatus: (status: ArStatus) => void,
@@ -228,6 +273,14 @@ export class FallbackArSession implements ArSessionController {
   }
 
   async start(): Promise<void> {
+    if (this.nativeMode) {
+      await this.startWithNativeFrames();
+      return;
+    }
+    const video = this.video;
+    if (!video) {
+      throw new Error("Camera mode requires a video element.");
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("This browser does not expose camera capture.");
     }
@@ -265,10 +318,10 @@ export class FallbackArSession implements ArSessionController {
     this.motionPermissionGranted = motionPermissionGranted;
     this.tracker = new wasmModule.ArTracker();
 
-    this.video.srcObject = stream;
-    this.video.muted = true;
-    this.video.playsInline = true;
-    await this.video.play();
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    await video.play();
 
     const captureCanvas = document.createElement("canvas");
     this.captureContext = captureCanvas.getContext("2d", {
@@ -282,23 +335,81 @@ export class FallbackArSession implements ArSessionController {
     this.pointOverlayContext = this.pointOverlayCanvas.getContext("2d");
 
     this.scene = new ThreeArScene(this.canvas);
-    this.scene.configureVideoProjection(
-      this.tracker.horizontal_field_of_view_degrees(
-        this.video.videoWidth,
-        this.video.videoHeight,
-      ),
-      this.video.videoWidth / Math.max(this.video.videoHeight, 1),
-    );
+    this.configureSceneProjection();
     this.applyDebugSettings(this.debugSettings);
     window.addEventListener("devicemotion", this.onDeviceMotion);
     window.addEventListener("deviceorientation", this.onDeviceOrientation);
     window.addEventListener("resize", this.onResize);
     this.canvas.addEventListener("click", this.recenter);
     this.running = true;
-    if ("requestVideoFrameCallback" in this.video) {
-      this.videoFrameCallback = this.video.requestVideoFrameCallback(this.onVideoFrame);
+    if ("requestVideoFrameCallback" in video) {
+      this.videoFrameCallback = video.requestVideoFrameCallback(this.onVideoFrame);
     }
     this.animationFrame = requestAnimationFrame(this.renderFrame);
+  }
+
+  /**
+   * Native-camera mode start: no getUserMedia and no video element. The native
+   * ARKit host owns the camera and pushes grayscale frames through
+   * `window.__pizzanetNativeFrame`; the scene renders with a transparent clear
+   * color so the native camera view shows through behind it.
+   */
+  private async startWithNativeFrames(): Promise<void> {
+    const [motionPermissionGranted, wasmModule] = await Promise.all([
+      requestMotionPermissions(),
+      loadWasm(),
+    ]);
+    this.motionPermissionGranted = motionPermissionGranted;
+    this.tracker = new wasmModule.ArTracker();
+    this.pointOverlayContext = this.pointOverlayCanvas.getContext("2d");
+
+    this.scene = new ThreeArScene(this.canvas);
+    // The renderer already clears to transparent; keep the scene background
+    // unset so nothing paints over the native camera.
+    this.scene.scene.background = null;
+    this.scene.renderer.setClearColor(0x000000, 0);
+    // Frame dimensions arrive with the first pushed frame; the projection is
+    // configured then.
+    this.frameWidth = 0;
+    this.frameHeight = 0;
+    this.applyDebugSettings(this.debugSettings);
+    window.addEventListener("devicemotion", this.onDeviceMotion);
+    window.addEventListener("deviceorientation", this.onDeviceOrientation);
+    window.addEventListener("resize", this.onResize);
+    this.canvas.addEventListener("click", this.recenter);
+    window.__pizzanetNativeFrame = this.onNativeFrame;
+    this.running = true;
+    this.animationFrame = requestAnimationFrame(this.renderFrame);
+  }
+
+  /**
+   * Applies the current field of view to the virtual camera projection using
+   * the source frame dimensions: the video element in camera mode, or the
+   * dimensions of the last pushed frame in native-camera mode.
+   */
+  private configureSceneProjection(): void {
+    if (!this.tracker || !this.scene) {
+      return;
+    }
+    const { width, height } = this.sourceDimensions();
+    if (width === 0 || height === 0) {
+      return;
+    }
+    this.scene.configureVideoProjection(
+      this.tracker.horizontal_field_of_view_degrees(width, height),
+      width / Math.max(height, 1),
+    );
+  }
+
+  /** Full-resolution source dimensions that display cover-fit math maps from. */
+  private sourceDimensions(): { width: number; height: number } {
+    if (this.nativeMode) {
+      return { width: this.frameWidth, height: this.frameHeight };
+    }
+    return {
+      width: this.video?.videoWidth ?? 0,
+      height: this.video?.videoHeight ?? 0,
+    };
   }
 
   recenter = (): void => {
@@ -336,14 +447,8 @@ export class FallbackArSession implements ArSessionController {
         settings.longAxisFieldOfViewDegrees,
       )
     ) {
-      // Keep the virtual camera projection consistent with the video FOV.
-      this.scene?.configureVideoProjection(
-        this.tracker.horizontal_field_of_view_degrees(
-          this.video.videoWidth,
-          this.video.videoHeight,
-        ),
-        this.video.videoWidth / Math.max(this.video.videoHeight, 1),
-      );
+      // Keep the virtual camera projection consistent with the source FOV.
+      this.configureSceneProjection();
     }
   }
 
@@ -351,7 +456,7 @@ export class FallbackArSession implements ArSessionController {
     if (!import.meta.env.DEV) {
       throw new Error("Recording is only available from the Vite development server.");
     }
-    if (!this.stream || !this.tracker) {
+    if (!this.stream || !this.tracker || !this.video) {
       throw new Error("Start the camera session before recording.");
     }
     if (this.devRecording) {
@@ -386,9 +491,12 @@ export class FallbackArSession implements ArSessionController {
   async stop(): Promise<void> {
     this.running = false;
     cancelAnimationFrame(this.animationFrame);
-    if (this.videoFrameCallback !== 0) {
+    if (this.videoFrameCallback !== 0 && this.video) {
       this.video.cancelVideoFrameCallback(this.videoFrameCallback);
       this.videoFrameCallback = 0;
+    }
+    if (window.__pizzanetNativeFrame === this.onNativeFrame) {
+      delete window.__pizzanetNativeFrame;
     }
     this.devRecording?.cancel();
     this.devRecording = null;
@@ -397,8 +505,10 @@ export class FallbackArSession implements ArSessionController {
     window.removeEventListener("resize", this.onResize);
     this.canvas.removeEventListener("click", this.recenter);
     this.stream?.getTracks().forEach((track) => track.stop());
-    this.video.pause();
-    this.video.srcObject = null;
+    if (this.video) {
+      this.video.pause();
+      this.video.srcObject = null;
+    }
     this.clearPointOverlay();
     this.scene?.dispose();
     this.tracker?.free();
@@ -415,6 +525,7 @@ export class FallbackArSession implements ArSessionController {
     }
 
     if (
+      !this.nativeMode &&
       this.videoFrameCallback === 0 &&
       timestampMilliseconds - this.lastCaptureMilliseconds >=
         this.minimumCaptureIntervalMilliseconds
@@ -456,7 +567,7 @@ export class FallbackArSession implements ArSessionController {
 
   private applyTrackerFrameSize(targetFrameWidth: number): void {
     const captureCanvas = this.captureContext?.canvas;
-    if (!captureCanvas || this.video.videoWidth === 0) {
+    if (!captureCanvas || !this.video || this.video.videoWidth === 0) {
       return;
     }
     this.frameWidth = targetFrameWidth;
@@ -477,7 +588,12 @@ export class FallbackArSession implements ArSessionController {
   }
 
   private captureFrame(timestampMilliseconds: number): void {
-    if (!this.captureContext || !this.tracker || this.video.readyState < 2) {
+    if (
+      !this.captureContext ||
+      !this.tracker ||
+      !this.video ||
+      this.video.readyState < 2
+    ) {
       return;
     }
     this.captureContext.drawImage(
@@ -538,6 +654,11 @@ export class FallbackArSession implements ArSessionController {
    * of the full camera frame, so tracker coordinates first scale up by
    * `videoWidth / frameWidth` (and `videoHeight / frameHeight`, which only
    * differs by the height rounding) before the cover transform applies.
+   *
+   * In native-camera mode there is no video element: the native camera view
+   * fills the viewport behind the page, so the same cover math applies with
+   * the pushed frame's dimensions as the source (the tracker-to-source scale
+   * is then 1).
    */
   private drawTrackedPoints(): void {
     const context = this.pointOverlayContext;
@@ -548,8 +669,7 @@ export class FallbackArSession implements ArSessionController {
     const overlayCanvas = context.canvas;
     const displayWidth = overlayCanvas.clientWidth;
     const displayHeight = overlayCanvas.clientHeight;
-    const videoWidth = this.video.videoWidth;
-    const videoHeight = this.video.videoHeight;
+    const { width: videoWidth, height: videoHeight } = this.sourceDimensions();
     if (
       displayWidth === 0 ||
       displayHeight === 0 ||

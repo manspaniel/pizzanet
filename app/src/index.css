@@ -37,6 +37,23 @@ button {
   background: linear-gradient(160deg, #110c1c 0%, #08060d 62%);
 }
 
+/* Native-camera mode: the page runs in a WKWebView stacked on a native ARKit
+   camera view, so nothing may paint an opaque background — the native camera
+   must show through behind the Three.js canvas. */
+:root.native-camera-mode,
+.native-camera-mode body {
+  background: transparent;
+}
+
+.native-camera-mode .experience-shell {
+  background: transparent;
+}
+
+.native-camera-mode .debug-row select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .camera-feed,
 .ar-canvas,
 .point-overlay,

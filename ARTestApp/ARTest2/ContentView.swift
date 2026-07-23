@@ -11,6 +11,7 @@
 import ARKit
 import RealityKit
 import SwiftUI
+import WebKit
 
 struct ContentView: View {
     @StateObject private var recorder = RecordingSession()
@@ -18,6 +19,8 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ARSessionView(recorder: recorder)
+                .edgesIgnoringSafeArea(.all)
+            WebOverlayView(recorder: recorder)
                 .edgesIgnoringSafeArea(.all)
             VStack(spacing: 10) {
                 statusLine
@@ -91,6 +94,40 @@ struct ARSessionView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {}
+}
+
+/// Transparent webview running the pizzanet web app in native-camera mode,
+/// stacked over the ARKit view: the native camera is the backdrop, the page
+/// renders its Three.js content on a clear background, and the recorder
+/// pushes each throttled ARKit luma frame into the page.
+struct WebOverlayView: UIViewRepresentable {
+    let recorder: RecordingSession
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
+        if #available(iOS 16.4, *) {
+            webView.isInspectable = true
+        }
+        let url = URL(string: "https://danlinux.warg-balance.ts.net/?nativeCamera=1")!
+        webView.load(URLRequest(url: url))
+
+        recorder.core.onLumaFrame = { [weak webView] frameId, timestamp, width, height, base64 in
+            DispatchQueue.main.async {
+                let script =
+                    "window.__pizzanetNativeFrame && window.__pizzanetNativeFrame(\(frameId), \(timestamp), \(width), \(height), '\(base64)');"
+                webView?.evaluateJavaScript(script, completionHandler: nil)
+            }
+        }
+        return webView
+    }
+
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
 #Preview {
