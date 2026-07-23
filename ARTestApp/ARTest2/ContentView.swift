@@ -103,10 +103,28 @@ struct ARSessionView: UIViewRepresentable {
 struct WebOverlayView: UIViewRepresentable {
     let recorder: RecordingSession
 
+    /// WKWebView never shows Safari's motion-permission prompt — it asks the
+    /// host app through this delegate, and silently denies without one.
+    final class Coordinator: NSObject, WKUIDelegate {
+        func webView(
+            _ webView: WKWebView,
+            requestDeviceOrientationAndMotionPermissionFor origin: WKSecurityOrigin,
+            initiatedByFrame frame: WKFrameInfo,
+            decisionHandler: @escaping (WKPermissionDecision) -> Void
+        ) {
+            decisionHandler(.grant)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.uiDelegate = context.coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
