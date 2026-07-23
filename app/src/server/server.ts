@@ -64,11 +64,17 @@ app.post("/api/dev/recordings", async (c) => {
       "frameEvents",
       maximumSidecarCharacters,
     );
+    // Native ARKit recordings carry no camera video (the luma stream is the
+    // camera record) but do carry ground-truth poses.
     const video = form.get("video");
-    if (video === null || typeof video === "string" || video.size === 0) {
+    const hasVideo = video !== null && typeof video !== "string" && video.size > 0;
+    const arkitPoses = form.get("arkitPoses");
+    const arkitPosesText =
+      typeof arkitPoses === "string" && arkitPoses.length > 0 ? arkitPoses : null;
+    if (!hasVideo && arkitPosesText === null) {
       throw new Error("A non-empty camera video is required.");
     }
-    const extension = videoExtension(video.type);
+    const extension = hasVideo ? videoExtension(video.type) : null;
     const trackerLuma = form.get("trackerLuma");
     if (
       trackerLuma === null ||
@@ -106,26 +112,23 @@ app.post("/api/dev/recordings", async (c) => {
     const finalDirectory = resolve(recordingsRoot, recordingId);
     temporaryDirectory = resolve(recordingsRoot, `.${recordingId}.tmp`);
     await mkdir(temporaryDirectory, { recursive: true });
-    const videoName = `camera.${extension}`;
+    const videoName = extension === null ? null : `camera.${extension}`;
     const storedManifest = {
       ...clientManifest,
       files: {
-        cameraVideo: videoName,
+        ...(videoName === null ? {} : { cameraVideo: videoName }),
         frameEvents: "tracker-frames.ndjson",
         sensorEvents: "sensor-events.ndjson",
         trackerLuma: "tracker-luma.gray",
+        ...(arkitPosesText === null ? {} : { arkitPoses: "arkit-poses.ndjson" }),
       },
       receivedAtIso: new Date().toISOString(),
       recordingId,
     };
-    await Promise.all([
+    const writes: Promise<void>[] = [
       writeFile(
         resolve(temporaryDirectory, "manifest.json"),
         `${JSON.stringify(storedManifest, null, 2)}\n`,
-      ),
-      writeFile(
-        resolve(temporaryDirectory, videoName),
-        new Uint8Array(await video.arrayBuffer()),
       ),
       writeFile(resolve(temporaryDirectory, "sensor-events.ndjson"), sensorEvents),
       writeFile(resolve(temporaryDirectory, "tracker-frames.ndjson"), frameEvents),
@@ -133,7 +136,21 @@ app.post("/api/dev/recordings", async (c) => {
         resolve(temporaryDirectory, "tracker-luma.gray"),
         new Uint8Array(await trackerLuma.arrayBuffer()),
       ),
-    ]);
+    ];
+    if (hasVideo && videoName !== null) {
+      writes.push(
+        writeFile(
+          resolve(temporaryDirectory, videoName),
+          new Uint8Array(await video.arrayBuffer()),
+        ),
+      );
+    }
+    if (arkitPosesText !== null) {
+      writes.push(
+        writeFile(resolve(temporaryDirectory, "arkit-poses.ndjson"), arkitPosesText),
+      );
+    }
+    await Promise.all(writes);
     await rename(temporaryDirectory, finalDirectory);
     temporaryDirectory = null;
     return c.json(
