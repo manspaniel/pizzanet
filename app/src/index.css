@@ -1,1 +1,325 @@
 @import "tailwindcss";
+
+:root {
+  color: #f8f4ff;
+  background: #08060d;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+button {
+  color: inherit;
+  font: inherit;
+}
+
+.experience-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: linear-gradient(160deg, #110c1c 0%, #08060d 62%);
+}
+
+.camera-feed,
+.ar-canvas,
+.point-overlay,
+.interface-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.camera-feed {
+  z-index: 0;
+  display: none;
+  object-fit: cover;
+  background: #000;
+}
+
+.camera-feed.is-visible {
+  display: block;
+}
+
+.ar-canvas {
+  z-index: 1;
+  display: block;
+  touch-action: none;
+}
+
+/* Sits above the AR canvas but never intercepts input; the session draws
+   tracked feature points into it in CSS pixel space. */
+.point-overlay {
+  z-index: 2;
+  display: none;
+  pointer-events: none;
+}
+
+.point-overlay.is-visible {
+  display: block;
+}
+
+.interface-layer {
+  z-index: 3;
+  display: grid;
+  pointer-events: none;
+}
+
+.launch-card {
+  align-self: center;
+  justify-self: center;
+  width: min(100% - 32px, 380px);
+  padding: 22px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 20px;
+  background: rgb(16 11 27 / 88%);
+  pointer-events: auto;
+}
+
+.launch-card h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.capability-line {
+  margin: 8px 0 0;
+  color: #b8adc6;
+  font-size: 0.8rem;
+}
+
+.notice {
+  margin: 12px 0 0;
+  padding: 11px 12px;
+  border-radius: 13px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.notice-warning {
+  border: 1px solid rgb(255 182 72 / 32%);
+  color: #ffd99e;
+  background: rgb(105 59 8 / 32%);
+}
+
+.notice-error {
+  border: 1px solid rgb(255 102 121 / 34%);
+  color: #ffc1c9;
+  background: rgb(111 21 34 / 34%);
+}
+
+.primary-button {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 16px;
+  border: 0;
+  border-radius: 14px;
+  color: #fff;
+  background: linear-gradient(135deg, #9d48ff, #7131e8);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.status-light {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #ffb04f;
+  box-shadow: 0 0 14px currentColor;
+}
+
+.state-tracking {
+  color: #5af1ae;
+  background: currentColor;
+}
+
+.state-limited {
+  color: #ffbd5d;
+  background: currentColor;
+}
+
+.state-initializing {
+  color: #c995ff;
+  background: currentColor;
+}
+
+.status-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    0
+    max(12px, env(safe-area-inset-left));
+}
+
+.status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.status-pill,
+.icon-button,
+.guidance-panel,
+.debug-panel {
+  border: 1px solid rgb(255 255 255 / 13%);
+  background: rgb(8 6 13 / 68%);
+  backdrop-filter: blur(18px);
+  pointer-events: auto;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.icon-button {
+  min-height: 36px;
+  padding: 0 13px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.icon-button.is-recording {
+  border-color: rgb(255 112 126 / 72%);
+  background: rgb(178 42 62 / 62%);
+}
+
+.icon-button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.guidance-panel {
+  align-self: end;
+  justify-self: center;
+  width: min(calc(100% - 24px), 520px);
+  margin-bottom: max(12px, env(safe-area-inset-bottom));
+  padding: 10px 13px;
+  border-radius: 14px;
+}
+
+.guidance-panel p {
+  margin: 0;
+  color: #f0eaf8;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.guidance-panel .recording-status {
+  margin-top: 6px;
+  color: #cdbedb;
+  font-size: 0.72rem;
+}
+
+.guidance-panel .recording-status.state-recording {
+  color: #ffb7bf;
+}
+
+.guidance-panel .recording-status.state-error {
+  color: #ffb3a9;
+}
+
+.debug-panel {
+  position: absolute;
+  top: calc(max(12px, env(safe-area-inset-top)) + 46px);
+  left: max(12px, env(safe-area-inset-left));
+  width: min(250px, calc(100% - 24px));
+  border-radius: 10px;
+  color: #b9aec6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.debug-panel-toggle {
+  display: block;
+  width: 100%;
+  padding: 5px 9px;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.debug-panel-body {
+  display: grid;
+  gap: 6px;
+  padding: 0 9px 9px;
+}
+
+.debug-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.debug-row > span {
+  flex: 0 0 auto;
+  min-width: 12ch;
+}
+
+.debug-row input[type="range"] {
+  flex: 1 1 80px;
+  min-width: 60px;
+  height: 18px;
+  accent-color: #9d48ff;
+}
+
+.debug-row input[type="checkbox"] {
+  accent-color: #9d48ff;
+}
+
+.debug-row select {
+  padding: 1px 3px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 5px;
+  color: inherit;
+  background: rgb(8 6 13 / 85%);
+  font: inherit;
+}
+
+.debug-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  padding-top: 4px;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+  color: #948aa1;
+}

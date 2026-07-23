@@ -77,6 +77,20 @@ struct CameraPathParameters {
     sway_phase: f32,
 }
 
+#[derive(Clone, Copy)]
+struct CameraSceneObstacles<'a> {
+    extensions: &'a [SampledBuildingExtension],
+    backgrounds: &'a [SampledBackgroundBuilding],
+    vegetation: &'a [SampledVegetation],
+}
+
+#[derive(Clone, Copy)]
+struct CameraObstacleSize {
+    half_x: f32,
+    half_z: f32,
+    height_m: f32,
+}
+
 /// Collision and framing envelope of the roof that is actually rendered.
 ///
 /// Negative scenes must never use the otherwise-unlabelled two-tier reference
@@ -121,8 +135,8 @@ fn sample_foreground_occluder_position(
     building: SampledBuilding,
     camera: Vec3,
     target: Vec3,
-    half_x: f32,
-    half_z: f32,
+    size: CameraObstacleSize,
+    frames: &[CameraFramePlan],
 ) -> Option<Vec3> {
     let sightline = sub(target, camera);
     let lateral = normalize(Vec3::new(-sightline.z, 0.0, sightline.x));
@@ -131,7 +145,9 @@ fn sample_foreground_occluder_position(
         let offset = sample_range(rng, config.foreground_lateral_offset_m) * sample_signed(rng);
         let point = add(camera, scale(sightline, depth));
         let candidate = add(Vec3::new(point.x, 0.0, point.z), scale(lateral, offset));
-        if outside_target_footprint(candidate, building, half_x, half_z) {
+        if outside_target_footprint(candidate, building, size.half_x, size.half_z)
+            && occluder_position_clears_camera_path(candidate, size, frames)
+        {
             return Some(candidate);
         }
     }
@@ -142,23 +158,59 @@ fn sample_site_occluder_position(
     rng: &mut ChaCha20Rng,
     config: &crate::OccluderSamplingConfig,
     building: SampledBuilding,
-    half_x: f32,
-    half_z: f32,
-) -> Vec3 {
-    let mut candidate = Vec3::new(0.0, 0.0, 0.0);
+    size: CameraObstacleSize,
+    frames: &[CameraFramePlan],
+) -> Option<Vec3> {
     for _ in 0..64 {
         let angle = rng.random::<f32>() * TAU;
         let distance = sample_range(rng, config.distance_m);
-        candidate = Vec3::new(
+        let candidate = Vec3::new(
             libm::cosf(angle) * distance,
             0.0,
             libm::sinf(angle) * distance,
         );
-        if outside_target_footprint(candidate, building, half_x, half_z) {
-            return candidate;
+        if outside_target_footprint(candidate, building, size.half_x, size.half_z)
+            && occluder_position_clears_camera_path(candidate, size, frames)
+        {
+            return Some(candidate);
         }
     }
-    move_outside_target_footprint(candidate, building, half_x, half_z)
+    None
+}
+
+fn occluder_position_clears_camera_path(
+    position: Vec3,
+    size: CameraObstacleSize,
+    frames: &[CameraFramePlan],
+) -> bool {
+    let (minimum, maximum) = camera_clearance_bounds(position, size);
+    let mut previous = None;
+    for frame in frames {
+        let camera = frame.camera.world_from_camera.translation;
+        if point_inside_aabb(camera, minimum, maximum)
+            || previous
+                .is_some_and(|start| segment_intersects_aabb(start, camera, minimum, maximum))
+        {
+            return false;
+        }
+        previous = Some(camera);
+    }
+    true
+}
+
+fn camera_clearance_bounds(position: Vec3, size: CameraObstacleSize) -> (Vec3, Vec3) {
+    (
+        Vec3::new(
+            position.x - size.half_x - CAMERA_COLLISION_CLEARANCE_M,
+            position.y - CAMERA_COLLISION_CLEARANCE_M,
+            position.z - size.half_z - CAMERA_COLLISION_CLEARANCE_M,
+        ),
+        Vec3::new(
+            position.x + size.half_x + CAMERA_COLLISION_CLEARANCE_M,
+            position.y + size.height_m + CAMERA_COLLISION_CLEARANCE_M,
+            position.z + size.half_z + CAMERA_COLLISION_CLEARANCE_M,
+        ),
+    )
 }
 
 fn outside_target_footprint(
@@ -172,40 +224,11 @@ fn outside_target_footprint(
             >= building.footprint_depth_m * 0.5 + half_z + OCCLUDER_TARGET_CLEARANCE_M
 }
 
-fn move_outside_target_footprint(
-    mut position: Vec3,
-    building: SampledBuilding,
-    half_x: f32,
-    half_z: f32,
-) -> Vec3 {
-    let required_x = building.footprint_width_m * 0.5 + half_x + OCCLUDER_TARGET_CLEARANCE_M + 0.01;
-    let required_z = building.footprint_depth_m * 0.5 + half_z + OCCLUDER_TARGET_CLEARANCE_M + 0.01;
-    if position.x.abs() < 1.0e-4 && position.z.abs() < 1.0e-4 {
-        position.x = required_x;
-        return position;
-    }
-    let x_factor = if position.x.abs() < 1.0e-4 {
-        f32::INFINITY
-    } else {
-        required_x / position.x.abs()
-    };
-    let z_factor = if position.z.abs() < 1.0e-4 {
-        f32::INFINITY
-    } else {
-        required_z / position.z.abs()
-    };
-    let factor = x_factor.min(z_factor).max(1.0);
-    position.x *= factor;
-    position.z *= factor;
-    position
-}
-
 fn collision_free_camera_path(
     initial: CameraPathParameters,
     building: SampledBuilding,
     roof: RoofEnvelope,
-    extensions: &[SampledBuildingExtension],
-    backgrounds: &[SampledBackgroundBuilding],
+    obstacles: CameraSceneObstacles<'_>,
     frame_count: u32,
     configured_min_distance: f32,
 ) -> CameraPathParameters {
@@ -214,7 +237,7 @@ fn collision_free_camera_path(
             + (roof.eave_depth_m * 0.5 + CAMERA_COLLISION_CLEARANCE_M).powi(2),
     ) + initial.handheld_sway
         + 0.05;
-    for extension in extensions {
+    for extension in obstacles.extensions {
         let half_x = extension.size_m.x * 0.5 + CAMERA_COLLISION_CLEARANCE_M;
         let half_z = extension.size_m.z * 0.5 + CAMERA_COLLISION_CLEARANCE_M;
         let outer_x = extension.position.x.abs() + half_x;
@@ -222,16 +245,21 @@ fn collision_free_camera_path(
         target_inner_radius = target_inner_radius
             .max(libm::sqrtf(outer_x * outer_x + outer_z * outer_z) + initial.handheld_sway + 0.05);
     }
-    let background_inner_radius = backgrounds.iter().fold(f32::INFINITY, |minimum, item| {
-        let (half_x, half_z) = rotated_half_extents(item.size_m, item.yaw_degrees);
-        let expanded_radius = libm::sqrtf(
-            (half_x + CAMERA_COLLISION_CLEARANCE_M).powi(2)
-                + (half_z + CAMERA_COLLISION_CLEARANCE_M).powi(2),
-        );
-        let centre_radius =
-            libm::sqrtf(item.position.x * item.position.x + item.position.z * item.position.z);
-        minimum.min(centre_radius - expanded_radius - initial.handheld_sway - 0.05)
-    });
+    let background_inner_radius =
+        obstacles
+            .backgrounds
+            .iter()
+            .fold(f32::INFINITY, |minimum, item| {
+                let (half_x, half_z) = rotated_half_extents(item.size_m, item.yaw_degrees);
+                let expanded_radius = libm::sqrtf(
+                    (half_x + CAMERA_COLLISION_CLEARANCE_M).powi(2)
+                        + (half_z + CAMERA_COLLISION_CLEARANCE_M).powi(2),
+                );
+                let centre_radius = libm::sqrtf(
+                    item.position.x * item.position.x + item.position.z * item.position.z,
+                );
+                minimum.min(centre_radius - expanded_radius - initial.handheld_sway - 0.05)
+            });
     let corridor_inner = target_inner_radius.max(configured_min_distance);
     let corridor_midpoint =
         if background_inner_radius.is_finite() && background_inner_radius > corridor_inner + 0.5 {
@@ -247,14 +275,7 @@ fn collision_free_camera_path(
         candidate = constrain_camera_path_to_annulus(candidate, target_inner_radius, f32::INFINITY);
         for angle_step in 0..96 {
             candidate.start = initial.start + angle_step as f32 * 2.399_963_1;
-            if camera_path_is_clear(
-                candidate,
-                building,
-                roof,
-                extensions,
-                backgrounds,
-                frame_count,
-            ) {
+            if camera_path_is_clear(candidate, building, roof, obstacles, frame_count) {
                 return candidate;
             }
         }
@@ -268,44 +289,33 @@ fn collision_free_camera_path(
             target_inner_radius,
             background_inner_radius,
         );
-        if camera_path_is_clear(
-            fallback,
-            building,
-            roof,
-            extensions,
-            backgrounds,
-            frame_count,
-        ) {
+        if camera_path_is_clear(fallback, building, roof, obstacles, frame_count) {
             return fallback;
         }
     }
 
-    let background_outer_radius = backgrounds
-        .iter()
-        .fold(target_inner_radius, |maximum, item| {
-            let (half_x, half_z) = rotated_half_extents(item.size_m, item.yaw_degrees);
-            let expanded_radius = libm::sqrtf(
-                (half_x + CAMERA_COLLISION_CLEARANCE_M).powi(2)
-                    + (half_z + CAMERA_COLLISION_CLEARANCE_M).powi(2),
-            );
-            let centre_radius =
-                libm::sqrtf(item.position.x * item.position.x + item.position.z * item.position.z);
-            maximum.max(centre_radius + expanded_radius)
-        })
-        + initial.handheld_sway
-        + 1.0;
+    let background_outer_radius =
+        obstacles
+            .backgrounds
+            .iter()
+            .fold(target_inner_radius, |maximum, item| {
+                let (half_x, half_z) = rotated_half_extents(item.size_m, item.yaw_degrees);
+                let expanded_radius = libm::sqrtf(
+                    (half_x + CAMERA_COLLISION_CLEARANCE_M).powi(2)
+                        + (half_z + CAMERA_COLLISION_CLEARANCE_M).powi(2),
+                );
+                let centre_radius = libm::sqrtf(
+                    item.position.x * item.position.x + item.position.z * item.position.z,
+                );
+                maximum.max(centre_radius + expanded_radius)
+            })
+            + initial.handheld_sway
+            + 1.0;
     let mut fallback = with_camera_distance(initial, background_outer_radius + 2.0);
     fallback = constrain_camera_path_to_annulus(fallback, background_outer_radius, f32::INFINITY);
     for angle_step in 0..192 {
         fallback.start = initial.start + angle_step as f32 * 2.399_963_1;
-        if camera_path_is_clear(
-            fallback,
-            building,
-            roof,
-            extensions,
-            backgrounds,
-            frame_count,
-        ) {
+        if camera_path_is_clear(fallback, building, roof, obstacles, frame_count) {
             return fallback;
         }
     }
@@ -435,18 +445,26 @@ fn camera_path_is_clear(
     parameters: CameraPathParameters,
     building: SampledBuilding,
     roof: RoofEnvelope,
-    extensions: &[SampledBuildingExtension],
-    backgrounds: &[SampledBackgroundBuilding],
+    obstacles: CameraSceneObstacles<'_>,
     frame_count: u32,
 ) -> bool {
     let mut previous = None;
     for frame_index in 0..frame_count {
         let position =
             camera_path_position(parameters, sequence_progress(frame_index, frame_count));
-        if camera_point_intersects_scene(position, building, roof, extensions, backgrounds) {
+        if camera_point_intersects_scene(
+            position,
+            building,
+            roof,
+            obstacles.extensions,
+            obstacles.backgrounds,
+        ) {
             return false;
         }
-        if camera_view_intersects_background(position, building, roof, backgrounds) {
+        if camera_point_intersects_vegetation(position, obstacles.vegetation) {
+            return false;
+        }
+        if camera_view_intersects_background(position, building, roof, obstacles.backgrounds) {
             return false;
         }
         if let Some(start) = previous
@@ -455,15 +473,102 @@ fn camera_path_is_clear(
                 position,
                 building,
                 roof,
-                extensions,
-                backgrounds,
+                obstacles.extensions,
+                obstacles.backgrounds,
             )
+        {
+            return false;
+        }
+        if let Some(start) = previous
+            && camera_segment_intersects_vegetation(start, position, obstacles.vegetation)
         {
             return false;
         }
         previous = Some(position);
     }
     true
+}
+
+fn vegetation_camera_radius(vegetation: &SampledVegetation) -> f32 {
+    // Match the renderer's widest low-poly foliage extent conservatively. The
+    // clearance volume deliberately covers empty space beneath a crown too: a
+    // camera immediately beside a trunk can still let that trunk fill the FOV.
+    let extent_factor = match vegetation.kind {
+        VegetationKind::DeciduousTree | VegetationKind::Palm => 1.25,
+        VegetationKind::EvergreenTree => 1.0,
+        VegetationKind::Shrub => 1.4,
+    };
+    vegetation.canopy_radius_m * extent_factor + CAMERA_COLLISION_CLEARANCE_M
+}
+
+fn vegetation_camera_bounds(vegetation: &SampledVegetation) -> (Vec3, Vec3) {
+    let radius = vegetation_camera_radius(vegetation);
+    (
+        Vec3::new(
+            vegetation.position.x - radius,
+            vegetation.position.y - CAMERA_COLLISION_CLEARANCE_M,
+            vegetation.position.z - radius,
+        ),
+        Vec3::new(
+            vegetation.position.x + radius,
+            vegetation.position.y + vegetation.height_m + CAMERA_COLLISION_CLEARANCE_M,
+            vegetation.position.z + radius,
+        ),
+    )
+}
+
+pub(crate) fn camera_point_intersects_vegetation(
+    point: Vec3,
+    vegetation: &[SampledVegetation],
+) -> bool {
+    vegetation.iter().any(|item| {
+        let (minimum, maximum) = vegetation_camera_bounds(item);
+        point_inside_aabb(point, minimum, maximum)
+    })
+}
+
+pub(crate) fn camera_segment_intersects_vegetation(
+    start: Vec3,
+    end: Vec3,
+    vegetation: &[SampledVegetation],
+) -> bool {
+    vegetation.iter().any(|item| {
+        let (minimum, maximum) = vegetation_camera_bounds(item);
+        segment_intersects_aabb(start, end, minimum, maximum)
+    })
+}
+
+fn occluder_camera_bounds(occluder: &SampledOccluder) -> (Vec3, Vec3) {
+    let (half_x, half_z) = rotated_half_extents(occluder.nominal_size_m, occluder.yaw_degrees);
+    camera_clearance_bounds(
+        occluder.position,
+        CameraObstacleSize {
+            half_x,
+            half_z,
+            height_m: occluder.nominal_size_m.y,
+        },
+    )
+}
+
+pub(crate) fn camera_point_intersects_occluders(
+    point: Vec3,
+    occluders: &[SampledOccluder],
+) -> bool {
+    occluders.iter().any(|occluder| {
+        let (minimum, maximum) = occluder_camera_bounds(occluder);
+        point_inside_aabb(point, minimum, maximum)
+    })
+}
+
+pub(crate) fn camera_segment_intersects_occluders(
+    start: Vec3,
+    end: Vec3,
+    occluders: &[SampledOccluder],
+) -> bool {
+    occluders.iter().any(|occluder| {
+        let (minimum, maximum) = occluder_camera_bounds(occluder);
+        segment_intersects_aabb(start, end, minimum, maximum)
+    })
 }
 
 pub(crate) fn camera_view_intersects_background(
@@ -1434,8 +1539,11 @@ impl SequenceSampler {
             building,
             roof,
             ordinary_roof,
-            &composition.building_extensions,
-            &composition.background_buildings,
+            CameraSceneObstacles {
+                extensions: &composition.building_extensions,
+                backgrounds: &composition.background_buildings,
+                vegetation: &composition.vegetation,
+            },
         );
         let occluders = self.sample_occluders(request.building_seed, building, &frames);
         building.ground_half_extent_m = building.ground_half_extent_m.max(
@@ -1632,12 +1740,7 @@ impl SequenceSampler {
             &self.config.materials.walls
         };
         let choice = choose_material(&mut rng, choices);
-        SampledMaterial {
-            id: choice.id.clone(),
-            base_color_srgb: choice.base_color_srgb,
-            roughness: sample_range(&mut rng, choice.roughness),
-            weathering: sample_range(&mut rng, choice.weathering),
-        }
+        resolve_material_choice(&mut rng, choice)
     }
 
     fn sample_domain(&self, seed: u64) -> SceneDomainProfile {
@@ -2155,12 +2258,17 @@ impl SequenceSampler {
         let target = Vec3::new(0.0, building.wall_height_m + 1.5, 0.0);
         kinds
             .into_iter()
-            .map(|choice| {
+            .filter_map(|choice| {
                 let scale_value = sample_range(&mut rng, config.scale);
                 let yaw_degrees = rng.random::<f32>() * 360.0;
                 let nominal_size_m = occluder_size(choice.kind, scale_value);
                 let (half_x, half_z) = rotated_half_extents(nominal_size_m, yaw_degrees);
-                let (placement, position) = if rng.random::<f32>()
+                let obstacle_size = CameraObstacleSize {
+                    half_x,
+                    half_z,
+                    height_m: nominal_size_m.y,
+                };
+                let placement_and_position = if rng.random::<f32>()
                     < config.foreground_probability * foreground_probability_scale(choice.kind)
                 {
                     sample_foreground_occluder_position(
@@ -2169,34 +2277,33 @@ impl SequenceSampler {
                         building,
                         middle_camera,
                         target,
-                        half_x,
-                        half_z,
+                        obstacle_size,
+                        frames,
                     )
-                    .map_or_else(
-                        || {
-                            (
-                                OccluderPlacement::Site,
-                                sample_site_occluder_position(
-                                    &mut rng, config, building, half_x, half_z,
-                                ),
-                            )
-                        },
-                        |position| (OccluderPlacement::Foreground, position),
-                    )
+                    .map(|position| (OccluderPlacement::Foreground, position))
+                    .or_else(|| {
+                        sample_site_occluder_position(
+                            &mut rng,
+                            config,
+                            building,
+                            obstacle_size,
+                            frames,
+                        )
+                        .map(|position| (OccluderPlacement::Site, position))
+                    })
                 } else {
-                    (
-                        OccluderPlacement::Site,
-                        sample_site_occluder_position(&mut rng, config, building, half_x, half_z),
-                    )
+                    sample_site_occluder_position(&mut rng, config, building, obstacle_size, frames)
+                        .map(|position| (OccluderPlacement::Site, position))
                 };
-                SampledOccluder {
+                let (placement, position) = placement_and_position?;
+                Some(SampledOccluder {
                     kind: choice.kind,
                     position,
                     yaw_degrees,
                     scale: scale_value,
                     placement,
                     nominal_size_m,
-                }
+                })
             })
             .collect()
     }
@@ -2207,8 +2314,7 @@ impl SequenceSampler {
         building: SampledBuilding,
         roof: SampledRoof,
         ordinary_roof: Option<SampledOrdinaryRoof>,
-        building_extensions: &[SampledBuildingExtension],
-        background_buildings: &[SampledBackgroundBuilding],
+        obstacles: CameraSceneObstacles<'_>,
     ) -> (CameraMotionPlan, Vec<CameraFramePlan>) {
         let mut rng = rng(seed, "camera");
         let camera = self.config.camera;
@@ -2304,8 +2410,7 @@ impl SequenceSampler {
             },
             building,
             roof_envelope,
-            building_extensions,
-            background_buildings,
+            obstacles,
             sequence.frame_count,
             camera.distance_m.min,
         );
@@ -2480,12 +2585,29 @@ fn choose_roof_profile<'a>(
 
 fn resolved_material(rng: &mut ChaCha20Rng, choices: &[MaterialChoice]) -> SampledMaterial {
     let choice = choose_material(rng, choices);
+    resolve_material_choice(rng, choice)
+}
+
+fn resolve_material_choice(rng: &mut ChaCha20Rng, choice: &MaterialChoice) -> SampledMaterial {
     SampledMaterial {
         id: choice.id.clone(),
-        base_color_srgb: choice.base_color_srgb,
+        base_color_srgb: varied_base_color(rng, choice),
         roughness: sample_range(rng, choice.roughness),
         weathering: sample_range(rng, choice.weathering),
     }
+}
+
+fn varied_base_color(rng: &mut ChaCha20Rng, choice: &MaterialChoice) -> [f32; 3] {
+    if choice.base_color_variation == 0.0 {
+        return choice.base_color_srgb;
+    }
+    choice.base_color_srgb.map(|channel| {
+        let fractional_offset = sample_range(
+            rng,
+            FloatRange::new(-choice.base_color_variation, choice.base_color_variation),
+        );
+        (channel * (1.0 + fractional_offset)).clamp(0.0, 1.0)
+    })
 }
 
 fn choose_weather<'a>(rng: &mut ChaCha20Rng, choices: &'a [WeatherProfile]) -> &'a WeatherProfile {
@@ -2773,6 +2895,60 @@ fn quaternion_from_columns(x: Vec3, y: Vec3, z: Vec3) -> [f32; 4] {
 mod tests {
     use super::*;
 
+    fn sampler(frame_count: u32) -> SequenceSampler {
+        let mut config = GeneratorConfig::default();
+        config.sequence.frame_count = frame_count;
+        SequenceSampler::new(config).unwrap()
+    }
+
+    fn sampled_plan(sampler: &SequenceSampler, seed: u64, target_kind: TargetKind) -> SequencePlan {
+        sampler
+            .sample(SequenceRequest::procedural(
+                "classic_two_stage",
+                seed,
+                target_kind,
+            ))
+            .unwrap()
+    }
+
+    fn assert_camera_path_clears_sampled_clutter(plan: &SequencePlan) {
+        let mut previous = None;
+        for frame in &plan.frames {
+            let position = frame.camera.world_from_camera.translation;
+            assert!(
+                !camera_point_intersects_vegetation(position, &plan.scene.composition.vegetation,),
+                "seed {} frame {} intersects composition vegetation",
+                plan.request.building_seed,
+                frame.frame_index,
+            );
+            assert!(
+                !camera_point_intersects_occluders(position, &plan.scene.occluders),
+                "seed {} frame {} intersects a sampled occluder",
+                plan.request.building_seed,
+                frame.frame_index,
+            );
+            if let Some(start) = previous {
+                assert!(
+                    !camera_segment_intersects_vegetation(
+                        start,
+                        position,
+                        &plan.scene.composition.vegetation,
+                    ),
+                    "seed {} segment ending at frame {} intersects composition vegetation",
+                    plan.request.building_seed,
+                    frame.frame_index,
+                );
+                assert!(
+                    !camera_segment_intersects_occluders(start, position, &plan.scene.occluders),
+                    "seed {} segment ending at frame {} intersects a sampled occluder",
+                    plan.request.building_seed,
+                    frame.frame_index,
+                );
+            }
+            previous = Some(position);
+        }
+    }
+
     #[test]
     fn look_at_produces_valid_transform() {
         let transform = look_at(Vec3::new(4.0, 2.0, 7.0), Vec3::new(0.0, 5.0, 0.0));
@@ -2782,5 +2958,40 @@ mod tests {
     #[test]
     fn frame_key_is_lexically_ordered() {
         assert!(frame_key("seq-test", 9) < frame_key("seq-test", 10));
+    }
+
+    #[test]
+    fn seed_2713_camera_clears_the_sampled_evergreen() {
+        let plan = sampled_plan(&sampler(1), 2713, TargetKind::Target);
+
+        assert!(
+            plan.scene
+                .composition
+                .vegetation
+                .iter()
+                .any(|item| item.kind == VegetationKind::EvergreenTree),
+            "the regression seed must retain its composition evergreens",
+        );
+        assert_camera_path_clears_sampled_clutter(&plan);
+        assert!(plan.validate().is_valid());
+    }
+
+    #[test]
+    fn bounded_seed_sweep_keeps_camera_paths_clear_of_sampled_clutter() {
+        const SEED_COUNT: u64 = 512;
+        let sampler = sampler(5);
+        for seed in 0..SEED_COUNT {
+            let target_kind = if seed % 2 == 0 {
+                TargetKind::Target
+            } else {
+                TargetKind::Negative
+            };
+            let plan = sampled_plan(&sampler, seed, target_kind);
+            assert_camera_path_clears_sampled_clutter(&plan);
+            assert!(
+                plan.validate().is_valid(),
+                "seed {seed} generated an invalid plan"
+            );
+        }
     }
 }

@@ -164,8 +164,10 @@ impl PreviewMetadata {
 const fn roof_morphology_name(morphology: synth_data::RoofMorphology) -> &'static str {
     match morphology {
         synth_data::RoofMorphology::TallEarlyCrown => "tall_early_crown",
+        synth_data::RoofMorphology::NearSquareTall => "near_square_tall",
         synth_data::RoofMorphology::BalancedClassic => "balanced_classic",
         synth_data::RoofMorphology::LowWideLate => "low_wide_late",
+        synth_data::RoofMorphology::ShallowRemodelled => "shallow_remodelled",
     }
 }
 

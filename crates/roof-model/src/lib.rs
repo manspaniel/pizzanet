@@ -10,8 +10,9 @@ mod mobilenet;
 mod preprocess;
 
 pub use keypoint::{
-    HEATMAP_SIZE, KEYPOINT_COUNT, KeypointParameterGroups, KeypointRoofNet, KeypointRoofNetConfig,
-    KeypointRoofOutput, POINTS_PER_RING, ROOF_RING_COUNT, SPATIAL_INPUT_SIZE,
+    HEATMAP_SIZE, KEYPOINT_COUNT, KeypointParameterGroups, KeypointRoofGeometryOutput,
+    KeypointRoofNet, KeypointRoofNetConfig, KeypointRoofOutput, KeypointTrainingOptions,
+    POINTS_PER_RING, ROOF_RING_COUNT, SPATIAL_INPUT_SIZE,
 };
 pub use keypoint_prediction::{
     AmodalKeypointPrediction, BoundingBoxPrediction, DEFAULT_FIT_KEYPOINT_CONFIDENCE,

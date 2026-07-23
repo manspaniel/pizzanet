@@ -18,7 +18,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 
 [dev-dependencies]
-burn = { version = "0.21.0", default-features = false, features = ["std", "ndarray"] }
+burn = { version = "0.21.0", default-features = false, features = ["std", "autodiff", "flex", "ndarray"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4.3", features = ["wasm_js"] }

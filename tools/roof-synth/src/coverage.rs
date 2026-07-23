@@ -4,14 +4,14 @@ use std::{collections::BTreeSet, error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 use synth_data::{
-    DayPhase, GeneratorConfig, OrdinaryRoofFamily, RoofMorphology, SceneDomain, SequencePlan,
-    SequenceRequest, SequenceSampler, TargetKind,
+    ApparentScale, DayPhase, GeneratorConfig, OccluderPlacement, OrdinaryRoofFamily,
+    RoofMorphology, SceneDomain, SequencePlan, SequenceRequest, SequenceSampler, TargetKind,
 };
 
 /// Maximum number of consecutive candidate seeds inspected for categorical coverage.
 ///
 /// One million candidates is deliberately much larger than the expected discovery
-/// interval for the default 45 positive-weight cells, while still making a broken
+/// interval for the default 75 positive-weight cells, while still making a broken
 /// or incompatible distribution terminate deterministically.
 pub const CANDIDATE_SCAN_LIMIT: u64 = 1 << 20;
 
@@ -291,6 +291,9 @@ pub(crate) fn select_negative_sequence_plans(
                     seed,
                     message: error.to_string(),
                 })?;
+            if !plan_meets_visibility_risk_budget(&plan) {
+                continue;
+            }
             if scene_regime_from_plan(seed, &plan)? == desired_regime {
                 selected.push(SeededSequencePlan { seed, plan });
                 break;
@@ -335,6 +338,9 @@ fn select_sequence_plans_with_limit(
         }
         let candidate = sample_candidate(sampler, start_seed, offset)?;
         scanned = offset + 1;
+        if !plan_meets_visibility_risk_budget(&candidate.plan) {
+            continue;
+        }
         let cell = cell_from_plan(candidate.seed, &candidate.plan)?;
         if !required_cells.contains(&cell) {
             return Err(CoverageSelectionError::UnsupportedSampledCell {
@@ -387,6 +393,9 @@ fn select_sequence_plans_with_limit(
             continue;
         }
         let candidate = sample_seed(sampler, seed)?;
+        if !plan_meets_visibility_risk_budget(&candidate.plan) {
+            continue;
+        }
         let regime = scene_regime_from_plan(candidate.seed, &candidate.plan)?;
         let regime_index = regime.index();
         if selected_regime_counts[regime_index] < regime_quotas[regime_index] {
@@ -545,6 +554,19 @@ fn sample_seed(
     Ok(SeededSequencePlan { seed, plan })
 }
 
+fn plan_meets_visibility_risk_budget(plan: &SequencePlan) -> bool {
+    let foreground_count = plan
+        .scene
+        .occluders
+        .iter()
+        .filter(|occluder| occluder.placement == OccluderPlacement::Foreground)
+        .count();
+    if foreground_count > 1 {
+        return false;
+    }
+    plan.camera_motion.apparent_scale != ApparentScale::Partial || plan.scene.occluders.is_empty()
+}
+
 fn cell_from_plan(seed: u64, plan: &SequencePlan) -> Result<CoverageCell, CoverageSelectionError> {
     let environment = plan
         .scene
@@ -576,22 +598,23 @@ mod tests {
     }
 
     #[test]
-    fn default_configuration_covers_all_forty_five_cells_without_regime_skew() {
-        // The five detailed domains produce 45 cells, while exact balance over
-        // their three plan-level regimes requires 54 examples: 18 per regime.
-        let selection = select_sequence_plans(&sampler(), 0, 54).unwrap();
+    fn default_configuration_covers_all_seventy_five_cells_without_regime_skew() {
+        // Five morphologies by three phases by five detailed domains produce 75
+        // cells. Exact balance over the three plan-level regimes needs 90
+        // examples because urban and remote each contain 30 distinct cells.
+        let selection = select_sequence_plans(&sampler(), 0, 90).unwrap();
 
-        assert_eq!(selection.sequences.len(), 54);
-        assert_eq!(selection.summary.required_cell_count, 45);
-        assert_eq!(selection.summary.covered_cell_count, 45);
+        assert_eq!(selection.sequences.len(), 90);
+        assert_eq!(selection.summary.required_cell_count, 75);
+        assert_eq!(selection.summary.covered_cell_count, 75);
         assert!(selection.summary.full_coverage_required);
         assert!(selection.summary.full_coverage_achieved);
         assert_eq!(
             selection.summary.scene_regime_counts,
             SceneRegimeCounts {
-                urban: 18,
-                suburban: 18,
-                remote: 18,
+                urban: 30,
+                suburban: 30,
+                remote: 30,
             }
         );
         assert!(selection.summary.scene_regime_balance_achieved);
@@ -638,10 +661,10 @@ mod tests {
     #[test]
     fn bounded_scan_and_seed_overflow_fail_cleanly() {
         let sampler = sampler();
-        let bound_error = select_sequence_plans_with_limit(&sampler, 0, 54, 54).unwrap_err();
+        let bound_error = select_sequence_plans_with_limit(&sampler, 0, 90, 90).unwrap_err();
         assert!(matches!(
             bound_error,
-            CoverageSelectionError::MissingRequiredCoverage { scanned: 54, .. }
+            CoverageSelectionError::MissingRequiredCoverage { scanned: 90, .. }
         ));
         assert!(bound_error.to_string().contains("missing"));
 
@@ -695,6 +718,24 @@ mod tests {
         assert_eq!(target_counts, [11, 11, 10]);
         assert_eq!(negative_counts, [11, 10, 11]);
         assert_eq!(combined, [22, 21, 21]);
+    }
+
+    #[test]
+    fn selection_rejects_compounded_partial_crop_and_occlusion_risk() {
+        let sampler = sampler();
+        let targets = select_sequence_plans(&sampler, 9_000, 256).unwrap();
+        let negatives = select_negative_sequence_plans(&sampler, 9_000, 256, 256).unwrap();
+
+        assert!(
+            targets
+                .sequences
+                .iter()
+                .chain(&negatives)
+                .all(|candidate| plan_meets_visibility_risk_budget(&candidate.plan))
+        );
+        assert!(targets.sequences.iter().chain(&negatives).any(|candidate| {
+            candidate.plan.camera_motion.apparent_scale == ApparentScale::Partial
+        }));
     }
 
     fn regime_counts(plans: &[SeededSequencePlan]) -> [usize; 3] {

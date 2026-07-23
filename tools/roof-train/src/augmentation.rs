@@ -3,7 +3,7 @@
 use image::{Rgb, RgbImage};
 use synth_data::{FrameRecord, KeypointLabel, Visibility};
 
-use super::{SampleOrigin, sample_hash};
+use super::sample_hash;
 
 const MAX_ROLL_DEGREES: f32 = 8.0;
 const ROLL_HASH_SALT: u64 = 0x524f_4c4c;
@@ -52,24 +52,14 @@ fn rounded_scaled_dimension(short: u32, long: u32, target_long: u32) -> u32 {
         .max(1)
 }
 
-/// Returns a deterministic camera-roll angle for the two synthetic classes.
+/// Returns a deterministic camera-roll angle for every training source.
 ///
-/// Real photographs carry presence-only supervision. Leaving both real
-/// classes unrotated avoids making affine fill an accidental synthetic/real or
-/// positive/negative cue. The caller already disables all augmentation for
-/// evaluation and the explicit overfit gate.
-pub(super) fn synthetic_roll_radians(
-    origin: SampleOrigin,
-    key: &str,
-    epoch: usize,
-    training: bool,
-) -> Option<f32> {
-    if !training
-        || !matches!(
-            origin,
-            SampleOrigin::SyntheticTarget | SampleOrigin::SyntheticNegative
-        )
-    {
+/// Applying roll to only the renderer-backed classes makes camera orientation
+/// an avoidable synthetic/real cue. Reflection fill is source-derived, so the
+/// same transform is safe for presence-only photographs and synthetic images.
+/// The caller disables all augmentation for evaluation and the overfit gate.
+pub(super) fn training_roll_radians(key: &str, epoch: usize, training: bool) -> Option<f32> {
+    if !training {
         return None;
     }
     let hash = sample_hash(key, epoch, ROLL_HASH_SALT);
@@ -205,25 +195,13 @@ mod tests {
     };
 
     #[test]
-    fn roll_is_bounded_deterministic_and_synthetic_only() {
-        let first =
-            synthetic_roll_radians(SampleOrigin::SyntheticTarget, "roof-17", 3, true).unwrap();
-        let repeated =
-            synthetic_roll_radians(SampleOrigin::SyntheticTarget, "roof-17", 3, true).unwrap();
+    fn roll_is_bounded_deterministic_and_training_only() {
+        let first = training_roll_radians("roof-17", 3, true).unwrap();
+        let repeated = training_roll_radians("roof-17", 3, true).unwrap();
         assert_eq!(first, repeated);
         assert!(first.abs() <= MAX_ROLL_DEGREES.to_radians());
-        assert_eq!(
-            synthetic_roll_radians(SampleOrigin::RealPositive, "roof-17", 3, true),
-            None
-        );
-        assert_eq!(
-            synthetic_roll_radians(SampleOrigin::RealNegative, "building-2", 3, true),
-            None
-        );
-        assert_eq!(
-            synthetic_roll_radians(SampleOrigin::SyntheticNegative, "building-2", 3, false),
-            None
-        );
+        assert!(training_roll_radians("real-roof-17", 3, true).is_some());
+        assert_eq!(training_roll_radians("building-2", 3, false), None);
     }
 
     #[test]

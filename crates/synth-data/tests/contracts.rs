@@ -292,8 +292,8 @@ fn deterministic_sampling_is_byte_identical() {
     );
     assert!(first.scene.roof.crown_top_width_m < first.scene.roof.shoulder_width_m);
     assert!(first.scene.roof.crown_top_depth_m < first.scene.roof.shoulder_depth_m);
-    assert_eq!(first.sequence_id, "seq-0a02abb920c71666");
-    assert_eq!(first.config_fingerprint, "stable64:0e7ad8a81573d230");
+    assert_eq!(first.sequence_id, "seq-fa9539a22cfcb329");
+    assert_eq!(first.config_fingerprint, "stable64:402bbb3703bce52f");
     assert_eq!(first.scene.roof.eave_width_m.to_bits(), 1_103_896_300);
 }
 
@@ -791,8 +791,12 @@ fn partial_framing_crops_the_declared_image_edge() {
             partial_frames += 1;
         }
     }
-    assert!(partial_sequences > 650);
-    assert!(partial_frames > 15_600);
+    // The default deliberately-partial stratum is now 8%, down from 15%, to
+    // keep useful offscreen examples without dominating target supervision.
+    assert!(partial_sequences > 300);
+    assert!(partial_sequences < 500);
+    assert!(partial_frames > 7_200);
+    assert!(partial_frames < 12_000);
 }
 
 #[test]
@@ -828,7 +832,8 @@ fn negative_partial_framing_uses_the_rendered_ordinary_roof() {
             checked += 1;
         }
     }
-    assert!(checked > 3_000);
+    assert!(checked > 1_200);
+    assert!(checked < 2_600);
 }
 
 #[test]
@@ -934,6 +939,10 @@ fn defaults_generate_all_required_categorical_regimes() {
     assert_eq!(weather.len(), 5);
     for required in [
         "original_red",
+        "faded_red",
+        "terracotta_orange",
+        "weathered_tan_brown",
+        "light_metal",
         "repainted_neutral",
         "repainted_dark",
         "repainted_blue",

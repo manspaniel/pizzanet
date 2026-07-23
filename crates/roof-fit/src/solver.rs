@@ -26,6 +26,9 @@ const CENTER_BOUNDS: (f64, f64) = (-1.0, 2.0);
 const DEPTH_BOUNDS: (f64, f64) = (0.25, 100.0);
 const YAW_SEEDS: [f64; 3] = [-0.65, 0.0, 0.65];
 const PITCH_SEEDS: [f64; 3] = [-0.75, -0.38, -0.05];
+const SPARSE_OBSERVATION_LIMIT: usize = 6;
+const MINIMUM_RELATIVE_VERTEX_DEPTH: f64 = 0.12;
+const MAXIMUM_CONFIDENT_EXTRAPOLATION: f32 = 3.5;
 
 pub(super) fn fit_single_view(
     observation: &SingleViewObservation,
@@ -43,9 +46,26 @@ pub(super) fn fit_single_view(
             actual: observation_count,
         });
     }
+    if observation_count < SPARSE_OBSERVATION_LIMIT {
+        let (ring_count, corner_count) = observation_coverage(observation);
+        if ring_count < 3 || corner_count < 2 {
+            return Err(FitError::DegenerateObservations {
+                ring_count,
+                corner_count,
+            });
+        }
+    }
 
     let (center, span) = observation_extent(observation);
     let shape_prior = config.shape_prior.unwrap_or(DEFAULT_SHAPE_PRIOR);
+    let optimization_config = SingleViewFitConfig {
+        shape_prior_weight: if observation_count < SPARSE_OBSERVATION_LIMIT {
+            config.shape_prior_weight.max(0.05)
+        } else {
+            config.shape_prior_weight
+        },
+        ..config
+    };
     let fov_seeds = focal_hypotheses(config.focal_length);
     let fov_bounds = focal_bounds(config.focal_length);
     let solver = LevenbergMarquardt::new()
@@ -63,7 +83,7 @@ pub(super) fn fit_single_view(
                     for pitch in PITCH_SEEDS {
                         let problem = FitProblem::new(
                             observation,
-                            config,
+                            optimization_config,
                             corner_shift,
                             reflected,
                             shape_prior,
@@ -95,9 +115,9 @@ pub(super) fn fit_single_view(
 }
 
 fn validate_config(config: SingleViewFitConfig) -> Result<(), FitError> {
-    if !(6..=KEYPOINT_COUNT).contains(&config.minimum_observations) {
+    if !(4..=KEYPOINT_COUNT).contains(&config.minimum_observations) {
         return Err(FitError::InvalidConfiguration(
-            "minimum_observations must be between 6 and 12",
+            "minimum_observations must be between 4 and 12",
         ));
     }
     if !config.huber_delta.is_finite() || config.huber_delta <= 0.0 {
@@ -132,6 +152,13 @@ fn validate_config(config: SingleViewFitConfig) -> Result<(), FitError> {
     if !config.maximum_reprojection_rmse.is_finite() || config.maximum_reprojection_rmse <= 0.0 {
         return Err(FitError::InvalidConfiguration(
             "maximum_reprojection_rmse must be finite and positive",
+        ));
+    }
+    if !config.minimum_confidence_score.is_finite()
+        || !(0.0..=1.0).contains(&config.minimum_confidence_score)
+    {
+        return Err(FitError::InvalidConfiguration(
+            "minimum_confidence_score must lie between zero and one",
         ));
     }
     if let Some(shape_prior) = config.shape_prior
@@ -239,6 +266,21 @@ fn observation_extent(observation: &SingleViewObservation) -> ([f32; 2], f32) {
     (center, span)
 }
 
+fn observation_coverage(observation: &SingleViewObservation) -> (usize, usize) {
+    let mut rings = [false; 3];
+    let mut corners = [false; 4];
+    for (index, point) in observation.keypoints.iter().enumerate() {
+        if is_usable(*point) {
+            rings[index / 4] = true;
+            corners[index % 4] = true;
+        }
+    }
+    (
+        rings.into_iter().filter(|present| *present).count(),
+        corners.into_iter().filter(|present| *present).count(),
+    )
+}
+
 #[derive(Clone)]
 struct FitProblem {
     params: OVector<f64, U14>,
@@ -248,6 +290,7 @@ struct FitProblem {
     reflected: bool,
     shape_prior: [f64; SHAPE_PARAMETER_COUNT],
     fov_bounds: [f64; 2],
+    fov_prior_degrees: f64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -284,6 +327,7 @@ impl FitProblem {
             reflected,
             shape_prior: shape_prior.map(f64::from),
             fov_bounds,
+            fov_prior_degrees: fov_degrees,
         }
     }
 
@@ -366,16 +410,20 @@ impl FitProblem {
             residuals.push(weight * dy);
         }
 
+        let minimum_depth =
+            (MINIMUM_RELATIVE_VERTEX_DEPTH * f64::from(decoded.camera.translation[2])).max(0.02);
         for keypoint in &roof.keypoints {
             let depth = f64::from(decoded.camera.view_point(keypoint.position)[2]);
-            residuals.push((0.02 - depth).max(0.0) * 10.0);
+            residuals.push((minimum_depth - depth).max(0.0) * 10.0);
         }
         let shape_weight = f64::from(self.config.shape_prior_weight).sqrt();
         for index in 0..SHAPE_PARAMETER_COUNT {
             residuals.push(shape_weight * (decoded.shape[index] - self.shape_prior[index]));
         }
         let focal_residual = match self.config.focal_length {
-            FocalLengthConfig::Estimate { .. } => 0.0,
+            FocalLengthConfig::Estimate { .. } => {
+                0.04 * (decoded.horizontal_fov_degrees - self.fov_prior_degrees) / 15.0
+            }
             FocalLengthConfig::Known {
                 horizontal_fov_degrees,
                 uncertainty_degrees,
@@ -494,6 +542,7 @@ impl Candidate {
 
         let mut squared_error = 0.0_f32;
         let mut weight_sum = 0.0_f32;
+        let mut inlier_weight = 0.0_f32;
         let mut observation_count = 0;
         let mut inlier_count = 0;
         for (model_index, projected) in projected_keypoints.iter().enumerate() {
@@ -512,20 +561,34 @@ impl Candidate {
             observation_count += 1;
             if distance_squared.sqrt() <= 2.0 * config.huber_delta {
                 inlier_count += 1;
+                inlier_weight += observed.weight;
             }
         }
         let reprojection_rmse = (squared_error / weight_sum.max(f32::EPSILON)).sqrt();
-        let inlier_ratio = inlier_count as f32 / observation_count.max(1) as f32;
+        let inlier_ratio = inlier_weight / weight_sum.max(f32::EPSILON);
         let coverage = observation_count as f32 / KEYPOINT_COUNT as f32;
+        let (_, observed_span) = observation_extent(observation);
+        let fitted_span = (max[0] - min[0]).max(max[1] - min[1]);
+        let extrapolation_ratio = fitted_span / observed_span.max(0.02);
+        let extrapolation_score = if extrapolation_ratio <= 1.75 {
+            1.0
+        } else {
+            ((MAXIMUM_CONFIDENT_EXTRAPOLATION - extrapolation_ratio)
+                / (MAXIMUM_CONFIDENT_EXTRAPOLATION - 1.75))
+                .clamp(0.0, 1.0)
+        };
         let rmse_score =
             (1.0 - reprojection_rmse / config.maximum_reprojection_rmse).clamp(0.0, 1.0);
-        let score = (rmse_score * inlier_ratio * (0.5 + 0.5 * coverage)).clamp(0.0, 1.0);
+        let score = (rmse_score * inlier_ratio * extrapolation_score * (0.5 + 0.5 * coverage))
+            .clamp(0.0, 1.0);
         let accepted = observation_count >= config.minimum_observations
             && reprojection_rmse <= config.maximum_reprojection_rmse
-            && inlier_ratio >= 2.0 / 3.0;
+            && inlier_ratio >= 2.0 / 3.0
+            && extrapolation_ratio <= MAXIMUM_CONFIDENT_EXTRAPOLATION
+            && score >= config.minimum_confidence_score;
 
         Ok(SingleViewRoofFit {
-            schema_version: "single-view-roof-fit/v2".to_owned(),
+            schema_version: "single-view-roof-fit/v3".to_owned(),
             parameters,
             camera,
             projected_keypoints,
@@ -541,6 +604,8 @@ impl Candidate {
                 score,
                 accepted,
                 inlier_count,
+                weighted_inlier_ratio: inlier_ratio,
+                extrapolation_ratio,
             },
         })
     }
@@ -927,6 +992,51 @@ mod tests {
         }
         assert!(fit.bounding_box.min[0] < fit.bounding_box.max[0]);
         assert!(fit.bounding_box.min[1] < fit.bounding_box.max[1]);
+    }
+
+    #[test]
+    fn four_cross_tier_observations_produce_a_constrained_prior_guided_fit() {
+        let parameters = oracle_parameters();
+        let hidden = [2, 3, 5, 6, 7, 9, 10, 11];
+        let observation = synthetic_observation(&hidden, 0, false);
+        let fit = fit_single_view(
+            &observation,
+            SingleViewFitConfig {
+                minimum_observations: 4,
+                shape_prior_weight: 0.05,
+                ..oracle_config(parameters)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(fit.observation_count, 4);
+        assert!(fit.confidence.accepted, "{fit:#?}");
+        assert!(fit.reprojection_rmse < 0.02, "{fit:#?}");
+        assert!(silhouette_iou(&fit, parameters, oracle_camera()) > 0.65);
+    }
+
+    #[test]
+    fn sparse_observations_must_span_all_three_rings() {
+        let mut observation = SingleViewObservation::default();
+        for index in [0, 1, 4, 5, 6] {
+            observation.keypoints[index] = Some(KeypointObservation::new(
+                0.2 + index as f32 * 0.03,
+                0.3 + index as f32 * 0.02,
+            ));
+        }
+        let error = fit_single_view(
+            &observation,
+            SingleViewFitConfig {
+                minimum_observations: 4,
+                ..SingleViewFitConfig::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            FitError::DegenerateObservations { ring_count: 2, .. }
+        ));
     }
 
     #[test]

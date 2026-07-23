@@ -96,7 +96,8 @@ impl Default for FocalLengthConfig {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SingleViewFitConfig {
     /// Minimum number of finite landmarks needed for a constrained fit.
-    /// Values below six are rejected because the result cannot be trusted.
+    /// Sparse four- and five-point fits rely more heavily on the population
+    /// shape prior and still need observations from multiple rings/corners.
     pub minimum_observations: usize,
     /// Normalized-image Huber transition for landmark residuals.
     pub huber_delta: f32,
@@ -116,20 +117,23 @@ pub struct SingleViewFitConfig {
     pub solver_patience: usize,
     /// Largest normalized-image RMSE accepted as a confident mesh fit.
     pub maximum_reprojection_rmse: f32,
+    /// Smallest combined coverage/inlier/RMSE/plausibility score accepted.
+    pub minimum_confidence_score: f32,
 }
 
 impl Default for SingleViewFitConfig {
     fn default() -> Self {
         Self {
-            minimum_observations: 6,
+            minimum_observations: 4,
             huber_delta: 0.03,
-            shape_prior_weight: 0.001,
+            shape_prior_weight: 0.01,
             shape_prior: None,
             image_aspect_ratio: 1.0,
             principal_point: [0.5, 0.5],
             focal_length: FocalLengthConfig::default(),
             solver_patience: 64,
             maximum_reprojection_rmse: 0.05,
+            minimum_confidence_score: 0.25,
         }
     }
 }
@@ -253,12 +257,16 @@ pub struct FittedBounds {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FitConfidence {
-    /// Calibratable score in `[0, 1]` combining coverage, inliers, and RMSE.
+    /// Calibratable score in `[0, 1]` combining coverage, inliers, RMSE, and extrapolation.
     pub score: f32,
-    /// Whether the result passes the configured observation and RMSE gates.
+    /// Whether the result passes all observation, residual, and plausibility gates.
     pub accepted: bool,
     /// Number of landmarks within two Huber transitions of the final model.
     pub inlier_count: usize,
+    /// Confidence-weighted fraction of observations classified as inliers.
+    pub weighted_inlier_ratio: f32,
+    /// Complete projected-mesh span divided by the observed landmark span.
+    pub extrapolation_ratio: f32,
 }
 
 /// One complete single-view roof estimate.
@@ -295,6 +303,16 @@ pub enum FitError {
         minimum: usize,
         /// Supplied usable observation count.
         actual: usize,
+    },
+    /// Sparse landmarks do not cover enough roof tiers to constrain a full mesh.
+    #[error(
+        "sparse roof fit needs observations from all three rings and at least two corner slots; got {ring_count} rings and {corner_count} slots"
+    )]
+    DegenerateObservations {
+        /// Number of eave/shoulder/crown rings represented.
+        ring_count: usize,
+        /// Number of cyclic corner slots represented.
+        corner_count: usize,
     },
     /// A caller supplied an invalid fitting configuration.
     #[error("invalid roof fit configuration: {0}")]

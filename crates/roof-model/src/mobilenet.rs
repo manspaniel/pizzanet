@@ -48,14 +48,36 @@ pub(crate) struct MobileNetPyramid<B: Backend> {
 
 impl<B: Backend> MobileNetFeatures<B> {
     pub(crate) fn forward_pyramid(&self, input: Tensor<B, 4>) -> MobileNetPyramid<B> {
+        self.forward_pyramid_with_normalization(input, BackboneNormalization::BackendDefault)
+    }
+
+    /// Runs the pretrained feature extractor with its imported running
+    /// statistics while leaving convolution and affine BatchNorm parameters
+    /// differentiable.
+    ///
+    /// This is intentionally separate from [`Self::forward_pyramid`]: Burn
+    /// selects training BatchNorm from the backend's autodiff state, but
+    /// fine-tuning this backbone should not replace its ImageNet population
+    /// statistics with the statistics of one small, source-balanced batch.
+    pub(crate) fn forward_pyramid_frozen_stats(&self, input: Tensor<B, 4>) -> MobileNetPyramid<B> {
+        self.forward_pyramid_with_normalization(input, BackboneNormalization::FrozenRunningStats)
+    }
+
+    fn forward_pyramid_with_normalization(
+        &self,
+        input: Tensor<B, 4>,
+        normalization: BackboneNormalization,
+    ) -> MobileNetPyramid<B> {
         let mut output = input;
         let mut stride_four = None;
         let mut stride_eight = None;
         let mut stride_sixteen = None;
         for (index, block) in self.blocks.iter().enumerate() {
             output = match block {
-                ConvBlock::InvertedResidual(block) => block.forward(&output),
-                ConvBlock::Conv(block) => block.forward(output),
+                ConvBlock::InvertedResidual(block) => {
+                    block.forward_with_normalization(&output, normalization)
+                }
+                ConvBlock::Conv(block) => block.forward_with_normalization(output, normalization),
             };
             match index {
                 3 => stride_four = Some(output.clone()),
@@ -71,6 +93,12 @@ impl<B: Backend> MobileNetFeatures<B> {
             stride_thirty_two: output,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum BackboneNormalization {
+    BackendDefault,
+    FrozenRunningStats,
 }
 
 #[derive(Module, Debug)]
@@ -170,8 +198,19 @@ struct ConvNormActivation<B: Backend> {
 }
 
 impl<B: Backend> ConvNormActivation<B> {
-    fn forward(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
-        relu(self.norm.forward(self.conv.forward(input))).clamp_max(6)
+    fn forward_with_normalization(
+        &self,
+        input: Tensor<B, 4>,
+        normalization: BackboneNormalization,
+    ) -> Tensor<B, 4> {
+        let output = self.conv.forward(input);
+        let output = match normalization {
+            BackboneNormalization::BackendDefault => self.norm.forward(output),
+            BackboneNormalization::FrozenRunningStats => {
+                forward_batch_norm_frozen_stats(&self.norm, output)
+            }
+        };
+        relu(output).clamp_max(6)
     }
 }
 
@@ -214,9 +253,39 @@ struct PointWiseLinear<B: Backend> {
 }
 
 impl<B: Backend> PointWiseLinear<B> {
-    fn forward(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
-        self.norm.forward(self.conv.forward(input))
+    fn forward_with_normalization(
+        &self,
+        input: Tensor<B, 4>,
+        normalization: BackboneNormalization,
+    ) -> Tensor<B, 4> {
+        let output = self.conv.forward(input);
+        match normalization {
+            BackboneNormalization::BackendDefault => self.norm.forward(output),
+            BackboneNormalization::FrozenRunningStats => {
+                forward_batch_norm_frozen_stats(&self.norm, output)
+            }
+        }
     }
+}
+
+fn forward_batch_norm_frozen_stats<B: Backend, const D: usize>(
+    norm: &BatchNorm<B>,
+    input: Tensor<B, D>,
+) -> Tensor<B, D> {
+    assert!(D >= 2, "BatchNorm input must have at least two dimensions");
+
+    let device = input.device();
+    let channels = input.dims()[1];
+    let mut shape = [1; D];
+    shape[1] = channels;
+    let mean = norm.running_mean.value().to_device(&device).reshape(shape);
+    let variance = norm.running_var.value().to_device(&device).reshape(shape);
+
+    input
+        .sub(mean)
+        .div(variance.add_scalar(norm.epsilon).sqrt())
+        .mul(norm.gamma.val().reshape(shape))
+        .add(norm.beta.val().reshape(shape))
 }
 
 #[derive(Module, Debug)]
@@ -258,13 +327,19 @@ impl<B: Backend> InvertedResidual<B> {
         }
     }
 
-    fn forward(&self, input: &Tensor<B, 4>) -> Tensor<B, 4> {
+    fn forward_with_normalization(
+        &self,
+        input: &Tensor<B, 4>,
+        normalization: BackboneNormalization,
+    ) -> Tensor<B, 4> {
         let mut output = input.clone();
         if let Some(pw) = &self.pw {
-            output = pw.forward(output);
+            output = pw.forward_with_normalization(output, normalization);
         }
-        output = self.dw.forward(output);
-        output = self.pw_linear.forward(output);
+        output = self.dw.forward_with_normalization(output, normalization);
+        output = self
+            .pw_linear
+            .forward_with_normalization(output, normalization);
         if self.use_residual {
             output + input.clone()
         } else {
@@ -323,4 +398,122 @@ fn download_weights() -> Result<PathBuf, std::io::Error> {
         file.write_all(&bytes)?;
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burn::{
+        backend::{Autodiff, NdArray},
+        tensor::TensorData,
+    };
+
+    type TestAutodiffBackend = Autodiff<NdArray<f32>>;
+
+    fn values(tensor: Tensor<TestAutodiffBackend, 1>) -> Vec<f32> {
+        tensor.to_data().to_vec::<f32>().expect("f32 tensor data")
+    }
+
+    fn running_stats(
+        features: &MobileNetFeatures<TestAutodiffBackend>,
+    ) -> Vec<(Vec<f32>, Vec<f32>)> {
+        let mut stats = Vec::new();
+        let mut push = |norm: &BatchNorm<TestAutodiffBackend>| {
+            stats.push((
+                values(norm.running_mean.value_sync()),
+                values(norm.running_var.value_sync()),
+            ));
+        };
+        for block in &features.blocks {
+            match block {
+                ConvBlock::Conv(block) => push(&block.norm),
+                ConvBlock::InvertedResidual(block) => {
+                    if let Some(pw) = &block.pw {
+                        push(&pw.norm);
+                    }
+                    push(&block.dw.norm);
+                    push(&block.pw_linear.norm);
+                }
+            }
+        }
+        stats
+    }
+
+    #[test]
+    fn frozen_backbone_forward_does_not_mutate_any_running_statistics() {
+        let device = Default::default();
+        let features = random_features::<TestAutodiffBackend>(&device);
+        let before = running_stats(&features);
+        let input = Tensor::random(
+            [2, 3, 32, 32],
+            burn::tensor::Distribution::Uniform(-1.0, 1.0),
+            &device,
+        )
+        .require_grad();
+
+        let pyramid = features.forward_pyramid_frozen_stats(input.clone());
+
+        assert_eq!(pyramid.stride_four.dims(), [2, 24, 8, 8]);
+        assert_eq!(pyramid.stride_eight.dims(), [2, 32, 4, 4]);
+        assert_eq!(pyramid.stride_sixteen.dims(), [2, 96, 2, 2]);
+        assert_eq!(pyramid.stride_thirty_two.dims(), [2, 1280, 1, 1]);
+        let gradients = pyramid.stride_thirty_two.backward();
+        assert!(input.grad(&gradients).is_some());
+        let ConvBlock::Conv(first) = &features.blocks[0] else {
+            panic!("the first MobileNetV2 feature block must be a convolution");
+        };
+        assert!(first.conv.weight.grad(&gradients).is_some());
+        assert!(first.norm.gamma.grad(&gradients).is_some());
+        assert!(first.norm.beta.grad(&gradients).is_some());
+        assert_eq!(running_stats(&features), before);
+    }
+
+    #[test]
+    fn ordinary_autodiff_forward_updates_backbone_running_statistics() {
+        let device = Default::default();
+        let features = random_features::<TestAutodiffBackend>(&device);
+        let before = running_stats(&features);
+        let input = Tensor::random(
+            [2, 3, 32, 32],
+            burn::tensor::Distribution::Uniform(-1.0, 1.0),
+            &device,
+        );
+
+        let _ = features.forward_pyramid(input);
+
+        assert_ne!(running_stats(&features), before);
+    }
+
+    #[test]
+    fn frozen_statistics_keep_input_and_affine_gradients() {
+        let device = Default::default();
+        let norm = BatchNormConfig::new(3).init::<TestAutodiffBackend>(&device);
+        let input: Tensor<TestAutodiffBackend, 4> = Tensor::from_data(
+            TensorData::from([
+                [[[1.0, 2.0]], [[3.0, 4.0]], [[5.0, 6.0]]],
+                [[[2.0, 3.0]], [[4.0, 5.0]], [[6.0, 7.0]]],
+            ]),
+            &device,
+        )
+        .require_grad();
+        let before = (
+            values(norm.running_mean.value_sync()),
+            values(norm.running_var.value_sync()),
+        );
+
+        let output = forward_batch_norm_frozen_stats(&norm, input.clone());
+        assert_eq!(output.dims(), input.dims());
+        let gradients = output.backward();
+
+        assert!(input.grad(&gradients).is_some());
+        assert!(norm.gamma.grad(&gradients).is_some());
+        assert!(norm.beta.grad(&gradients).is_some());
+        assert_eq!(
+            (
+                values(norm.running_mean.value_sync()),
+                values(norm.running_var.value_sync()),
+            ),
+            before
+        );
+    }
 }

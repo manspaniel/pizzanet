@@ -1,0 +1,686 @@
+{
+  "schema_version": "roof-inference-report/v8",
+  "image": "samples/images-4.jpg",
+  "model": "artifacts/roof-model-keypoints-v2/model.mpk",
+  "backend": "wgpu",
+  "backend_parity_verified": false,
+  "keypoint_threshold": 0.15,
+  "offscreen_threshold": 0.5,
+  "source_width": 640,
+  "source_height": 480,
+  "camera_metadata": {
+    "focal_length_35mm": null,
+    "horizontal_fov_degrees": null,
+    "focal_source": "estimated"
+  },
+  "accepted_keypoint_count": 12,
+  "detection": {
+    "schema_version": "keypoint-roof-detection/v1",
+    "probability": 0.9993748,
+    "threshold": 0.00096789934,
+    "detected": true,
+    "bounding_box": {
+      "min_x": 0.10051644,
+      "min_y": 0.24287622,
+      "max_x": 0.9311801,
+      "max_y": 0.4900433
+    },
+    "rings": [
+      {
+        "ring": "eave",
+        "points": [
+          {
+            "slot": 0,
+            "position": [
+              0.10051644,
+              0.4900433
+            ],
+            "confidence": 0.7519643,
+            "offscreen_probability": 0.0010033062,
+            "offscreen": false
+          },
+          {
+            "slot": 1,
+            "position": [
+              0.9311801,
+              0.46954945
+            ],
+            "confidence": 0.5943409,
+            "offscreen_probability": 0.0005281043,
+            "offscreen": false
+          },
+          {
+            "slot": 2,
+            "position": [
+              0.93002445,
+              0.4655763
+            ],
+            "confidence": 0.35706547,
+            "offscreen_probability": 0.047784287,
+            "offscreen": false
+          },
+          {
+            "slot": 3,
+            "position": [
+              0.39557245,
+              0.46935895
+            ],
+            "confidence": 0.6477105,
+            "offscreen_probability": 0.000053110303,
+            "offscreen": false
+          }
+        ]
+      },
+      {
+        "ring": "shoulder",
+        "points": [
+          {
+            "slot": 0,
+            "position": [
+              0.3036799,
+              0.39703456
+            ],
+            "confidence": 0.6786815,
+            "offscreen_probability": 0.0000025344282,
+            "offscreen": false
+          },
+          {
+            "slot": 1,
+            "position": [
+              0.62818456,
+              0.35783717
+            ],
+            "confidence": 0.65594476,
+            "offscreen_probability": 4.6713055e-7,
+            "offscreen": false
+          },
+          {
+            "slot": 2,
+            "position": [
+              0.6067621,
+              0.4435098
+            ],
+            "confidence": 0.47972244,
+            "offscreen_probability": 0.0000021689477,
+            "offscreen": false
+          },
+          {
+            "slot": 3,
+            "position": [
+              0.44024494,
+              0.38603976
+            ],
+            "confidence": 0.6613184,
+            "offscreen_probability": 1.8878718e-7,
+            "offscreen": false
+          }
+        ]
+      },
+      {
+        "ring": "crown",
+        "points": [
+          {
+            "slot": 0,
+            "position": [
+              0.3627141,
+              0.325273
+            ],
+            "confidence": 0.5555908,
+            "offscreen_probability": 0.0000015278929,
+            "offscreen": false
+          },
+          {
+            "slot": 1,
+            "position": [
+              0.6023621,
+              0.24287622
+            ],
+            "confidence": 0.7171348,
+            "offscreen_probability": 0.0000116610345,
+            "offscreen": false
+          },
+          {
+            "slot": 2,
+            "position": [
+              0.61922884,
+              0.26656604
+            ],
+            "confidence": 0.49235108,
+            "offscreen_probability": 0.00066063454,
+            "offscreen": false
+          },
+          {
+            "slot": 3,
+            "position": [
+              0.44445264,
+              0.3565803
+            ],
+            "confidence": 0.46729535,
+            "offscreen_probability": 0.00039460952,
+            "offscreen": false
+          }
+        ]
+      }
+    ]
+  },
+  "fit_attempted": true,
+  "inferred_roof_ratios": {
+    "eave_depth_to_eave_width": 0.64377075,
+    "shoulder_width_to_eave_width": 0.47575614,
+    "shoulder_depth_to_eave_depth": 0.44104493,
+    "crown_width_to_shoulder_width": 0.8194777,
+    "crown_depth_to_shoulder_depth": 0.7250691,
+    "lower_rise_to_eave_width": 0.0937959,
+    "upper_rise_to_eave_width": 0.08901596
+  },
+  "fit": {
+    "schema_version": "single-view-roof-fit/v3",
+    "parameters": {
+      "eave_width": 1.0,
+      "eave_depth": 0.64377075,
+      "shoulder_width": 0.47575614,
+      "shoulder_depth": 0.28393182,
+      "crown_top_width": 0.38987154,
+      "crown_top_depth": 0.2058702,
+      "lower_rise": 0.0937959,
+      "upper_rise": 0.08901596
+    },
+    "camera": {
+      "focal_length": [
+        0.6328645,
+        0.8438193
+      ],
+      "principal_point": [
+        0.5,
+        0.5
+      ],
+      "translation": [
+        0.009965663,
+        0.028611524,
+        0.91223687
+      ],
+      "yaw_radians": 0.58176166,
+      "pitch_radians": -0.04234221,
+      "roll_radians": 0.03030934,
+      "corner_shift": 0,
+      "reflected": false
+    },
+    "projected_keypoints": [
+      [
+        0.09714365,
+        0.4900386
+      ],
+      [
+        0.9311658,
+        0.47048602
+      ],
+      [
+        0.92193604,
+        0.45681852
+      ],
+      [
+        0.39933956,
+        0.47430727
+      ],
+      [
+        0.3146711,
+        0.3951087
+      ],
+      [
+        0.62301433,
+        0.35228506
+      ],
+      [
+        0.7003937,
+        0.37744868
+      ],
+      [
+        0.43773162,
+        0.40582383
+      ],
+      [
+        0.35304663,
+        0.31272927
+      ],
+      [
+        0.598667,
+        0.25543955
+      ],
+      [
+        0.6603199,
+        0.2927882
+      ],
+      [
+        0.44113693,
+        0.33382255
+      ]
+    ],
+    "projected_mesh": {
+      "vertices": [
+        {
+          "position": [
+            0.9311658,
+            0.47048602
+          ],
+          "depth": 0.36904192
+        },
+        {
+          "position": [
+            0.09714365,
+            0.4900386
+          ],
+          "depth": 0.91804606
+        },
+        {
+          "position": [
+            0.3146711,
+            0.3951087
+          ],
+          "depth": 0.9203569
+        },
+        {
+          "position": [
+            0.62301433,
+            0.35228506
+          ],
+          "depth": 0.65916485
+        },
+        {
+          "position": [
+            0.92193604,
+            0.45681852
+          ],
+          "depth": 0.9064277
+        },
+        {
+          "position": [
+            0.9311658,
+            0.47048602
+          ],
+          "depth": 0.36904192
+        },
+        {
+          "position": [
+            0.62301433,
+            0.35228506
+          ],
+          "depth": 0.65916485
+        },
+        {
+          "position": [
+            0.7003937,
+            0.37744868
+          ],
+          "depth": 0.8961761
+        },
+        {
+          "position": [
+            0.39933956,
+            0.47430727
+          ],
+          "depth": 1.4554318
+        },
+        {
+          "position": [
+            0.92193604,
+            0.45681852
+          ],
+          "depth": 0.9064277
+        },
+        {
+          "position": [
+            0.7003937,
+            0.37744868
+          ],
+          "depth": 0.8961761
+        },
+        {
+          "position": [
+            0.43773162,
+            0.40582383
+          ],
+          "depth": 1.1573682
+        },
+        {
+          "position": [
+            0.09714365,
+            0.4900386
+          ],
+          "depth": 0.91804606
+        },
+        {
+          "position": [
+            0.39933956,
+            0.47430727
+          ],
+          "depth": 1.4554318
+        },
+        {
+          "position": [
+            0.43773162,
+            0.40582383
+          ],
+          "depth": 1.1573682
+        },
+        {
+          "position": [
+            0.3146711,
+            0.3951087
+          ],
+          "depth": 0.9203569
+        },
+        {
+          "position": [
+            0.62301433,
+            0.35228506
+          ],
+          "depth": 0.65916485
+        },
+        {
+          "position": [
+            0.3146711,
+            0.3951087
+          ],
+          "depth": 0.9203569
+        },
+        {
+          "position": [
+            0.35304663,
+            0.31272927
+          ],
+          "depth": 0.9255943
+        },
+        {
+          "position": [
+            0.598667,
+            0.25543955
+          ],
+          "depth": 0.7115532
+        },
+        {
+          "position": [
+            0.7003937,
+            0.37744868
+          ],
+          "depth": 0.8961761
+        },
+        {
+          "position": [
+            0.62301433,
+            0.35228506
+          ],
+          "depth": 0.65916485
+        },
+        {
+          "position": [
+            0.598667,
+            0.25543955
+          ],
+          "depth": 0.7115532
+        },
+        {
+          "position": [
+            0.6603199,
+            0.2927882
+          ],
+          "depth": 0.88340276
+        },
+        {
+          "position": [
+            0.43773162,
+            0.40582383
+          ],
+          "depth": 1.1573682
+        },
+        {
+          "position": [
+            0.7003937,
+            0.37744868
+          ],
+          "depth": 0.8961761
+        },
+        {
+          "position": [
+            0.6603199,
+            0.2927882
+          ],
+          "depth": 0.88340276
+        },
+        {
+          "position": [
+            0.44113693,
+            0.33382255
+          ],
+          "depth": 1.0974438
+        },
+        {
+          "position": [
+            0.3146711,
+            0.3951087
+          ],
+          "depth": 0.9203569
+        },
+        {
+          "position": [
+            0.43773162,
+            0.40582383
+          ],
+          "depth": 1.1573682
+        },
+        {
+          "position": [
+            0.44113693,
+            0.33382255
+          ],
+          "depth": 1.0974438
+        },
+        {
+          "position": [
+            0.35304663,
+            0.31272927
+          ],
+          "depth": 0.9255943
+        },
+        {
+          "position": [
+            0.35304663,
+            0.31272927
+          ],
+          "depth": 0.9255943
+        },
+        {
+          "position": [
+            0.44113693,
+            0.33382255
+          ],
+          "depth": 1.0974438
+        },
+        {
+          "position": [
+            0.6603199,
+            0.2927882
+          ],
+          "depth": 0.88340276
+        },
+        {
+          "position": [
+            0.598667,
+            0.25543955
+          ],
+          "depth": 0.7115532
+        },
+        {
+          "position": [
+            0.09714365,
+            0.4900386
+          ],
+          "depth": 0.91804606
+        },
+        {
+          "position": [
+            0.9311658,
+            0.47048602
+          ],
+          "depth": 0.36904192
+        },
+        {
+          "position": [
+            0.92193604,
+            0.45681852
+          ],
+          "depth": 0.9064277
+        },
+        {
+          "position": [
+            0.39933956,
+            0.47430727
+          ],
+          "depth": 1.4554318
+        }
+      ],
+      "indices": [
+        0,
+        1,
+        2,
+        0,
+        2,
+        3,
+        4,
+        5,
+        6,
+        4,
+        6,
+        7,
+        8,
+        9,
+        10,
+        8,
+        10,
+        11,
+        12,
+        13,
+        14,
+        12,
+        14,
+        15,
+        16,
+        17,
+        18,
+        16,
+        18,
+        19,
+        20,
+        21,
+        22,
+        20,
+        22,
+        23,
+        24,
+        25,
+        26,
+        24,
+        26,
+        27,
+        28,
+        29,
+        30,
+        28,
+        30,
+        31,
+        32,
+        33,
+        34,
+        32,
+        34,
+        35,
+        36,
+        37,
+        38,
+        36,
+        38,
+        39
+      ],
+      "faces": [
+        {
+          "id": "lower_front",
+          "class": "lower_skirt",
+          "first_index": 0,
+          "index_count": 6
+        },
+        {
+          "id": "lower_right",
+          "class": "lower_skirt",
+          "first_index": 6,
+          "index_count": 6
+        },
+        {
+          "id": "lower_back",
+          "class": "lower_skirt",
+          "first_index": 12,
+          "index_count": 6
+        },
+        {
+          "id": "lower_left",
+          "class": "lower_skirt",
+          "first_index": 18,
+          "index_count": 6
+        },
+        {
+          "id": "upper_front",
+          "class": "upper_crown",
+          "first_index": 24,
+          "index_count": 6
+        },
+        {
+          "id": "upper_right",
+          "class": "upper_crown",
+          "first_index": 30,
+          "index_count": 6
+        },
+        {
+          "id": "upper_back",
+          "class": "upper_crown",
+          "first_index": 36,
+          "index_count": 6
+        },
+        {
+          "id": "upper_left",
+          "class": "upper_crown",
+          "first_index": 42,
+          "index_count": 6
+        },
+        {
+          "id": "crown_top",
+          "class": "upper_crown",
+          "first_index": 48,
+          "index_count": 6
+        },
+        {
+          "id": "underside",
+          "class": "underside",
+          "first_index": 54,
+          "index_count": 6
+        }
+      ]
+    },
+    "bounding_box": {
+      "min": [
+        0.09714365,
+        0.25543955
+      ],
+      "max": [
+        0.9311658,
+        0.4900386
+      ]
+    },
+    "reprojection_rmse": 0.03459553,
+    "observation_count": 12,
+    "confidence": {
+      "score": 0.2871523,
+      "accepted": true,
+      "inlier_count": 11,
+      "weighted_inlier_ratio": 0.9320422,
+      "extrapolation_ratio": 1.0040431
+    }
+  }
+}

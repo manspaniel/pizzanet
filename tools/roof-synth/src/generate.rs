@@ -419,6 +419,12 @@ fn generate_dataset_in_place(options: &GenerateOptions) -> Result<GenerationSumm
             })?;
             record.roof = plan.roof_instance();
             record.appearance.photometric_profile = Some(photometric_profile);
+            ensure_publishable_target_visibility(
+                &record.sample_key,
+                building_seed,
+                plan.camera_motion.framing_intent,
+                record.locator,
+            )?;
 
             let report = DatasetValidator::new(&manifest).validate_frame(&record);
             if !report.is_valid() {
@@ -781,6 +787,28 @@ fn photometric_seed(building_seed: u64, frame_index: u32) -> u64 {
         .wrapping_add(u64::from(frame_index).wrapping_mul(0x9e37_79b9_7f4a_7c15))
         .rotate_left(23)
         ^ 0x7068_6f6e_652d_7631
+}
+
+fn ensure_publishable_target_visibility(
+    sample_key: &str,
+    building_seed: u64,
+    framing_intent: synth_data::FramingIntent,
+    locator: LocatorLabel,
+) -> Result<()> {
+    if locator.target_kind == TargetKind::Target
+        && (!locator.visible_fraction.is_finite()
+            || locator.visible_fraction <= 0.0
+            || locator.bounding_box.is_none())
+    {
+        bail!(
+            "refusing to publish fully invisible target frame {} from building seed {} with {:?} framing (visible fraction {})",
+            sample_key,
+            building_seed,
+            framing_intent,
+            locator.visible_fraction
+        );
+    }
+    Ok(())
 }
 
 struct FrameBuildContext<'a> {
@@ -1526,6 +1554,62 @@ mod tests {
         assert_eq!(
             sampled_edge_visibility(&[Visibility::BehindCamera; 3]),
             EdgeVisibility::BehindCamera
+        );
+    }
+
+    #[test]
+    fn fully_invisible_target_frames_are_not_publishable() {
+        let bounds = NormalizedBoundingBox {
+            min: Vec2::new(0.2, 0.2),
+            max: Vec2::new(0.8, 0.8),
+        };
+        let mut locator = LocatorLabel {
+            target_kind: TargetKind::Target,
+            bounding_box: None,
+            amodal_bounding_box: Some(bounds),
+            visible_fraction: 0.0,
+            occluded_fraction: 1.0,
+            truncated: false,
+        };
+        assert!(
+            ensure_publishable_target_visibility(
+                "sample",
+                42,
+                synth_data::FramingIntent::Centered,
+                locator,
+            )
+            .is_err()
+        );
+
+        locator.bounding_box = Some(bounds);
+        locator.visible_fraction = 0.01;
+        locator.occluded_fraction = 0.99;
+        assert!(
+            ensure_publishable_target_visibility(
+                "sample",
+                42,
+                synth_data::FramingIntent::Centered,
+                locator,
+            )
+            .is_ok()
+        );
+
+        locator = LocatorLabel {
+            target_kind: TargetKind::Negative,
+            bounding_box: None,
+            amodal_bounding_box: None,
+            visible_fraction: 0.0,
+            occluded_fraction: 0.0,
+            truncated: false,
+        };
+        assert!(
+            ensure_publishable_target_visibility(
+                "sample",
+                42,
+                synth_data::FramingIntent::Centered,
+                locator,
+            )
+            .is_ok()
         );
     }
 }

@@ -32,7 +32,7 @@ use roof_model::{
 use serde::{Deserialize, Serialize};
 
 const MODEL_MANIFEST_SCHEMA: &str = "roof-keypoint-model/v3";
-const MINIMUM_CONFIDENT_FIT_OBSERVATIONS: usize = 6;
+const MINIMUM_CONFIDENT_FIT_OBSERVATIONS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum BackendChoice {
@@ -165,6 +165,11 @@ enum FitFailure {
         minimum: usize,
         actual: usize,
     },
+    DegenerateObservations {
+        message: String,
+        ring_count: usize,
+        corner_count: usize,
+    },
     InvalidConfiguration {
         message: String,
     },
@@ -183,6 +188,14 @@ impl From<&FitError> for FitFailure {
                     actual: *actual,
                 }
             }
+            FitError::DegenerateObservations {
+                ring_count,
+                corner_count,
+            } => Self::DegenerateObservations {
+                message: error.to_string(),
+                ring_count: *ring_count,
+                corner_count: *corner_count,
+            },
             FitError::InvalidConfiguration(_) => Self::InvalidConfiguration {
                 message: error.to_string(),
             },
@@ -248,6 +261,12 @@ fn run(args: Args) -> Result<()> {
     let manifest = load_model_manifest(&manifest_path)?;
     if let Some(manifest) = &manifest {
         validate_model_manifest(manifest, &manifest_path)?;
+    } else {
+        eprintln!(
+            "warning: checkpoint {} has no matching manifest {}; using uncalibrated default thresholds and the generic roof-shape prior",
+            checkpoint_path(&args.model).display(),
+            manifest_path.display()
+        );
     }
     let (presence_threshold, offscreen_threshold, keypoint_threshold) = resolve_thresholds(
         args.threshold,
@@ -368,7 +387,7 @@ fn run(args: Args) -> Result<()> {
         .as_ref()
         .map(|fit| InferredRoofRatios::from(&fit.parameters));
     let report = InferenceReport {
-        schema_version: "roof-inference-report/v7".to_owned(),
+        schema_version: "roof-inference-report/v8".to_owned(),
         image: args.image.display().to_string(),
         model: args.model.display().to_string(),
         backend: format!("{:?}", args.backend).to_lowercase(),
@@ -405,8 +424,12 @@ fn run(args: Args) -> Result<()> {
         },
         |fit| {
             format!(
-                "accepted={} rmse={:.4} confidence={:.3}",
-                fit.confidence.accepted, fit.reprojection_rmse, fit.confidence.score
+                "accepted={} rmse={:.4} confidence={:.3} weighted_inliers={:.3} extrapolation={:.2}x",
+                fit.confidence.accepted,
+                fit.reprojection_rmse,
+                fit.confidence.score,
+                fit.confidence.weighted_inlier_ratio,
+                fit.confidence.extrapolation_ratio,
             )
         },
     );
@@ -484,7 +507,7 @@ fn checkpoint_path(model_path: &Path) -> PathBuf {
 }
 
 fn model_manifest_path(model_path: &Path) -> PathBuf {
-    model_path.with_file_name("model.json")
+    checkpoint_path(model_path).with_extension("json")
 }
 
 fn load_model_manifest(manifest_path: &Path) -> Result<Option<ModelManifest>> {
@@ -974,6 +997,8 @@ mod tests {
                 score: if accepted { 0.9 } else { 0.1 },
                 accepted,
                 inlier_count: observation_count,
+                weighted_inlier_ratio: if accepted { 1.0 } else { 0.5 },
+                extrapolation_ratio: 1.0,
             },
         }
     }
@@ -1011,6 +1036,10 @@ mod tests {
         assert_eq!(
             checkpoint_path(Path::new("artifacts/roof-model-keypoints/model.json")),
             PathBuf::from("artifacts/roof-model-keypoints/model.mpk")
+        );
+        assert_eq!(
+            model_manifest_path(Path::new("artifacts/roof-model-keypoints/model-last.mpk")),
+            PathBuf::from("artifacts/roof-model-keypoints/model-last.json")
         );
     }
 
@@ -1162,11 +1191,11 @@ mod tests {
     }
 
     #[test]
-    fn confident_overlay_requires_detection_acceptance_and_six_observations() {
+    fn confident_overlay_requires_detection_acceptance_and_four_observations() {
         let mut detection = detection_with_confidences([0.9; KEYPOINT_COUNT]);
-        let underconstrained = fitted_roof(5, true);
+        let underconstrained = fitted_roof(3, true);
         let rejected = fitted_roof(12, false);
-        let accepted = fitted_roof(6, true);
+        let accepted = fitted_roof(4, true);
 
         assert!(!should_draw_fitted_mesh(
             &detection,
@@ -1198,7 +1227,7 @@ mod tests {
         let fit = fitted_roof(12, true);
         let ratios = InferredRoofRatios::from(&fit.parameters);
         let report = InferenceReport {
-            schema_version: "roof-inference-report/v7".to_owned(),
+            schema_version: "roof-inference-report/v8".to_owned(),
             image: "photo.jpg".to_owned(),
             model: "artifacts/roof-model-keypoints/model".to_owned(),
             backend: "wgpu".to_owned(),

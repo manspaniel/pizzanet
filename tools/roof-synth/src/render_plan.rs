@@ -97,7 +97,10 @@ impl ResolvedRenderAssets {
 }
 
 fn roof_layer(material_id: &str) -> u32 {
-    if matches!(material_id, "original_red" | "faded_red") {
+    if matches!(
+        material_id,
+        "original_red" | "faded_red" | "terracotta_orange" | "weathered_tan_brown"
+    ) {
         ROOF_TILE_LAYER
     } else {
         CORRUGATED_LAYER
@@ -146,6 +149,9 @@ mod tests {
     fn keeps_repainted_roofs_structural_without_reusing_red_albedo() {
         assert_eq!(roof_layer("original_red"), ROOF_TILE_LAYER);
         assert_eq!(roof_layer("faded_red"), ROOF_TILE_LAYER);
+        assert_eq!(roof_layer("terracotta_orange"), ROOF_TILE_LAYER);
+        assert_eq!(roof_layer("weathered_tan_brown"), ROOF_TILE_LAYER);
+        assert_eq!(roof_layer("light_metal"), CORRUGATED_LAYER);
         assert_eq!(roof_layer("repainted_blue"), CORRUGATED_LAYER);
         assert_eq!(roof_layer("repainted_green"), CORRUGATED_LAYER);
     }

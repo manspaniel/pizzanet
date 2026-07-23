@@ -101,11 +101,15 @@ impl Default for SceneSamplingConfig {
 pub enum RoofMorphology {
     /// A compact footprint with an early break into a conspicuously tall crown.
     TallEarlyCrown,
+    /// A near-square footprint with a steep skirt and especially tall crown.
+    NearSquareTall,
     /// The common, evenly proportioned two-stage silhouette.
     #[default]
     BalancedClassic,
     /// A broad footprint whose lower roof carries farther inward to a low crown.
     LowWideLate,
+    /// A shallow, broad-crowned silhouette associated with later remodelling.
+    ShallowRemodelled,
 }
 
 /// Correlated dimensional envelope for one roof morphology.
@@ -162,18 +166,18 @@ pub struct RoofSamplingConfig {
 impl Default for RoofSamplingConfig {
     fn default() -> Self {
         Self {
-            overhang_m: FloatRange::new(1.0, 2.4),
-            shoulder_width_fraction: FloatRange::new(0.44, 0.62),
-            shoulder_depth_fraction: FloatRange::new(0.36, 0.54),
-            lower_rise_m: FloatRange::new(2.2, 4.0),
-            upper_rise_m: FloatRange::new(2.2, 4.2),
-            crown_top_width_fraction: FloatRange::new(0.78, 0.94),
-            crown_top_depth_fraction: FloatRange::new(0.62, 0.86),
+            overhang_m: FloatRange::new(0.75, 2.5),
+            shoulder_width_fraction: FloatRange::new(0.40, 0.68),
+            shoulder_depth_fraction: FloatRange::new(0.36, 0.62),
+            lower_rise_m: FloatRange::new(1.35, 4.1),
+            upper_rise_m: FloatRange::new(1.15, 4.6),
+            crown_top_width_fraction: FloatRange::new(0.72, 0.97),
+            crown_top_depth_fraction: FloatRange::new(0.62, 0.94),
             asymmetry_fraction: FloatRange::new(-0.025, 0.025),
             profiles: vec![
                 RoofMorphologyProfile {
                     morphology: RoofMorphology::TallEarlyCrown,
-                    weight: 28,
+                    weight: 24,
                     footprint_aspect_ratio: FloatRange::new(1.05, 1.34),
                     overhang_m: FloatRange::new(1.35, 2.4),
                     shoulder_width_fraction: FloatRange::new(0.44, 0.53),
@@ -184,8 +188,20 @@ impl Default for RoofSamplingConfig {
                     crown_top_depth_fraction: FloatRange::new(0.68, 0.82),
                 },
                 RoofMorphologyProfile {
+                    morphology: RoofMorphology::NearSquareTall,
+                    weight: 11,
+                    footprint_aspect_ratio: FloatRange::new(0.92, 1.18),
+                    overhang_m: FloatRange::new(1.2, 2.5),
+                    shoulder_width_fraction: FloatRange::new(0.40, 0.52),
+                    shoulder_depth_fraction: FloatRange::new(0.40, 0.54),
+                    lower_rise_m: FloatRange::new(2.7, 4.1),
+                    upper_rise_m: FloatRange::new(3.3, 4.6),
+                    crown_top_width_fraction: FloatRange::new(0.72, 0.88),
+                    crown_top_depth_fraction: FloatRange::new(0.65, 0.84),
+                },
+                RoofMorphologyProfile {
                     morphology: RoofMorphology::BalancedClassic,
-                    weight: 47,
+                    weight: 38,
                     footprint_aspect_ratio: FloatRange::new(1.18, 1.58),
                     overhang_m: FloatRange::new(1.2, 2.15),
                     shoulder_width_fraction: FloatRange::new(0.48, 0.58),
@@ -197,7 +213,7 @@ impl Default for RoofSamplingConfig {
                 },
                 RoofMorphologyProfile {
                     morphology: RoofMorphology::LowWideLate,
-                    weight: 25,
+                    weight: 18,
                     footprint_aspect_ratio: FloatRange::new(1.42, 1.9),
                     overhang_m: FloatRange::new(1.0, 1.8),
                     shoulder_width_fraction: FloatRange::new(0.54, 0.62),
@@ -206,6 +222,18 @@ impl Default for RoofSamplingConfig {
                     upper_rise_m: FloatRange::new(2.2, 2.85),
                     crown_top_width_fraction: FloatRange::new(0.85, 0.94),
                     crown_top_depth_fraction: FloatRange::new(0.74, 0.86),
+                },
+                RoofMorphologyProfile {
+                    morphology: RoofMorphology::ShallowRemodelled,
+                    weight: 9,
+                    footprint_aspect_ratio: FloatRange::new(1.15, 1.75),
+                    overhang_m: FloatRange::new(0.75, 1.7),
+                    shoulder_width_fraction: FloatRange::new(0.52, 0.68),
+                    shoulder_depth_fraction: FloatRange::new(0.44, 0.62),
+                    lower_rise_m: FloatRange::new(1.35, 2.55),
+                    upper_rise_m: FloatRange::new(1.15, 2.35),
+                    crown_top_width_fraction: FloatRange::new(0.82, 0.97),
+                    crown_top_depth_fraction: FloatRange::new(0.74, 0.94),
                 },
             ],
         }
@@ -277,15 +305,15 @@ impl Default for CameraSamplingConfig {
             corner_reveal_weight: 18,
             zoom_probability: 0.34,
             zoom_ratio: FloatRange::new(0.72, 1.28),
-            partial_crop_probability: 0.15,
+            partial_crop_probability: 0.08,
             target_width_fraction: FloatRange::new(0.30, 0.70),
             distant_target_width_fraction: FloatRange::new(0.15, 0.30),
-            close_target_width_fraction: FloatRange::new(0.70, 0.95),
+            close_target_width_fraction: FloatRange::new(0.68, 0.84),
             distant_view_weight: 20,
             normal_view_weight: 60,
             close_view_weight: 20,
-            partial_target_width_fraction: FloatRange::new(0.92, 1.22),
-            framing_offset_fraction: FloatRange::new(0.16, 0.34),
+            partial_target_width_fraction: FloatRange::new(0.90, 1.08),
+            framing_offset_fraction: FloatRange::new(0.10, 0.22),
             handheld_sway_m: FloatRange::new(0.0, 0.075),
         }
     }
@@ -301,6 +329,12 @@ pub struct MaterialChoice {
     pub weight: u32,
     /// Base color in nonlinear sRGB, each channel in `[0, 1]`.
     pub base_color_srgb: [f32; 3],
+    /// Maximum independent fractional sRGB-channel variation per instance.
+    ///
+    /// Missing values decode as zero so legacy configurations retain their
+    /// exact fixed-colour behaviour.
+    #[serde(default)]
+    pub base_color_variation: f32,
     /// Physically based roughness range.
     pub roughness: FloatRange,
     /// Amount of fading, staining, and patch variation.
@@ -319,29 +353,33 @@ pub struct MaterialSamplingConfig {
 
 impl Default for MaterialSamplingConfig {
     fn default() -> Self {
-        let finish = |id: &str, weight, color| MaterialChoice {
+        let finish = |id: &str, weight, color, base_color_variation| MaterialChoice {
             id: id.to_owned(),
             weight,
             base_color_srgb: color,
+            base_color_variation,
             roughness: FloatRange::new(0.48, 0.92),
             weathering: FloatRange::new(0.0, 0.8),
         };
         Self {
             roof: vec![
-                finish("original_red", 24, [0.58, 0.055, 0.035]),
-                finish("faded_red", 18, [0.46, 0.10, 0.075]),
-                finish("repainted_neutral", 34, [0.37, 0.38, 0.37]),
-                finish("repainted_dark", 24, [0.12, 0.15, 0.17]),
-                finish("repainted_blue", 13, [0.08, 0.22, 0.34]),
-                finish("repainted_green", 11, [0.10, 0.25, 0.16]),
+                finish("original_red", 24, [0.58, 0.055, 0.035], 0.14),
+                finish("faded_red", 18, [0.46, 0.10, 0.075], 0.14),
+                finish("terracotta_orange", 9, [0.68, 0.24, 0.08], 0.12),
+                finish("weathered_tan_brown", 7, [0.40, 0.27, 0.15], 0.12),
+                finish("light_metal", 8, [0.72, 0.74, 0.72], 0.08),
+                finish("repainted_neutral", 34, [0.37, 0.38, 0.37], 0.12),
+                finish("repainted_dark", 24, [0.12, 0.15, 0.17], 0.12),
+                finish("repainted_blue", 13, [0.08, 0.22, 0.34], 0.14),
+                finish("repainted_green", 11, [0.10, 0.25, 0.16], 0.14),
             ],
             walls: vec![
-                finish("warm_brick", 28, [0.39, 0.18, 0.11]),
-                finish("painted_render", 30, [0.68, 0.64, 0.54]),
-                finish("neutral_cladding", 18, [0.43, 0.44, 0.42]),
-                finish("dark_repaint", 10, [0.12, 0.14, 0.15]),
-                finish("blue_repaint", 8, [0.12, 0.27, 0.38]),
-                finish("green_repaint", 6, [0.14, 0.31, 0.20]),
+                finish("warm_brick", 28, [0.39, 0.18, 0.11], 0.10),
+                finish("painted_render", 30, [0.68, 0.64, 0.54], 0.08),
+                finish("neutral_cladding", 18, [0.43, 0.44, 0.42], 0.08),
+                finish("dark_repaint", 10, [0.12, 0.14, 0.15], 0.10),
+                finish("blue_repaint", 8, [0.12, 0.27, 0.38], 0.10),
+                finish("green_repaint", 6, [0.14, 0.31, 0.20], 0.10),
             ],
         }
     }
@@ -432,7 +470,7 @@ pub struct OccluderSamplingConfig {
 impl Default for OccluderSamplingConfig {
     fn default() -> Self {
         Self {
-            count: U32Range::new(0, 7),
+            count: U32Range::new(0, 5),
             choices: vec![
                 OccluderChoice {
                     kind: OccluderKind::Vegetation,
@@ -460,8 +498,8 @@ impl Default for OccluderSamplingConfig {
                 },
             ],
             distance_m: FloatRange::new(4.0, 34.0),
-            scale: FloatRange::new(0.65, 1.35),
-            foreground_probability: 0.28,
+            scale: FloatRange::new(0.65, 1.25),
+            foreground_probability: 0.20,
             foreground_depth_fraction: FloatRange::new(0.18, 0.72),
             foreground_lateral_offset_m: FloatRange::new(1.25, 7.5),
         }

@@ -865,6 +865,7 @@ fn material(
         id: id.to_owned(),
         weight,
         base_color_srgb,
+        base_color_variation: 0.0,
         roughness: FloatRange::new(roughness_min, roughness_max),
         weathering: FloatRange::new(0.0, 0.82),
     }

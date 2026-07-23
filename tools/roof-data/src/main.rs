@@ -46,7 +46,7 @@ struct Cli {
 enum Command {
     /// Select and download ordinary-building negatives from Open Images.
     ImportOpenImages(ImportArgs),
-    /// Download recognisable former Pizza Hut buildings from Wikimedia Commons.
+    /// Download reviewed former Pizza Hut site records from Wikimedia Commons.
     ImportWikimediaPositives(WikimediaArgs),
     /// Render every Open Images candidate into indexed review pages.
     PrepareOpenImagesReview(OpenImagesDatasetArgs),
@@ -245,10 +245,28 @@ struct ReviewPageEntry {
     relative_path: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CharacteristicRoofVisibility {
+    Recognizable,
+    NotRecognizable,
+    Unreviewed,
+}
+
+impl CharacteristicRoofVisibility {
+    fn calibration_eligible(self) -> bool {
+        self == Self::Recognizable
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct PositiveRecord {
     page_id: u64,
+    characteristic_roof_visibility: CharacteristicRoofVisibility,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visibility_review_reason: Option<String>,
     title: String,
+    physical_building_id: String,
     split: String,
     relative_path: String,
     width: u32,
@@ -361,7 +379,7 @@ fn import_wikimedia_positives(args: WikimediaArgs) -> Result<()> {
             .collect::<Vec<_>>()
     });
     let manifest = PositiveDatasetManifest {
-        schema_version: "roof-positive-dataset/v1".to_owned(),
+        schema_version: "roof-positive-dataset/v2".to_owned(),
         dataset_id: "wikimedia-former-pizza-hut-positive".to_owned(),
         source_api: COMMONS_API.to_owned(),
         start_category: COMMONS_START_CATEGORY.to_owned(),
@@ -531,6 +549,7 @@ fn rejected_positive_title(title: &str) -> bool {
         "foundation stone",
         "interior",
         "food",
+        "sausage stromboli",
         "pizza supreme",
         "aaron's store",
         "two rivers, wi",
@@ -541,6 +560,7 @@ fn rejected_positive_title(title: &str) -> bool {
         "temporary topshop",
         "former pizza hut - panoramio",
         "church of our savior",
+        "church of our saviour",
         "former pizza hut, monticello",
         "former pizza hut, dawson",
         "bud hut",
@@ -549,9 +569,107 @@ fn rejected_positive_title(title: &str) -> bool {
         "brunswick square",
         "kfc hohe straße",
         "formerpizzahut, tequila's",
+        "union tpke",
+        "158-05 union turnpike",
+        "mta union",
     ]
     .iter()
     .any(|needle| title.contains(needle))
+}
+
+fn positive_building_id(page_id: u64, title: &str) -> String {
+    let title = title.to_ascii_lowercase();
+    let known = if title.contains("former-pizza hut, liverpool, new south wales") {
+        Some("former-pizza-hut-liverpool-nsw")
+    } else if title.contains("fiore's cafe, ocala") {
+        Some("fiores-cafe-ocala-florida")
+    } else if title.contains("kingswood retail park") {
+        Some("former-pizza-hut-kingswood-hull")
+    } else if title.contains("ashley st., valdosta") {
+        Some("former-pizza-hut-ashley-st-valdosta")
+    } else if title.contains("pizza hut") && title.contains(", adel") {
+        Some("former-pizza-hut-adel")
+    } else {
+        None
+    };
+    known
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("commons-page-{page_id}"))
+}
+
+fn positive_split(title: &str, physical_building_id: &str) -> &'static str {
+    // Curated holdouts are assigned by physical building, never by individual image. Fort
+    // Valley and Thomaston are clear, single-view characteristic roofs held out to keep the
+    // eligible test set building-diverse after provenance-only conversions are excluded.
+    match physical_building_id {
+        "former-pizza-hut-liverpool-nsw" | "fiores-cafe-ocala-florida" => "validation",
+        "former-pizza-hut-kingswood-hull" | "former-pizza-hut-ashley-st-valdosta" => "train",
+        "former-pizza-hut-adel" | "commons-page-166012896" | "commons-page-45880532" => "test",
+        _ => match stable_rank(title, 0x0053_504c_4954) % 100 {
+            0..=79 => "train",
+            80..=89 => "validation",
+            _ => "test",
+        },
+    }
+}
+
+/// Records whether this exact image visibly contains the characteristic two-tier roof.
+///
+/// Wikimedia category membership establishes historical-site provenance, not suitability for
+/// training or calibrating an architectural-form detector. Every locally reviewed image is
+/// listed explicitly so a newly discovered category member fails closed as `unreviewed`.
+fn positive_visibility_review(
+    page_id: u64,
+) -> (CharacteristicRoofVisibility, Option<&'static str>) {
+    use CharacteristicRoofVisibility::{NotRecognizable, Recognizable, Unreviewed};
+
+    match page_id {
+        2_464_532 | 49_871_479 | 166_012_896 | 48_650_274 | 45_880_532 | 182_947_770
+        | 8_811_635 | 156_691_318 | 128_168_923 | 48_650_272 | 128_030_567 | 158_484_353
+        | 128_168_919 | 128_168_920 | 128_168_921 | 182_947_765 | 192_189_464 | 13_800_975 => {
+            (Recognizable, None)
+        }
+        167_123_248 => (
+            NotRecognizable,
+            Some("single-stage hip roof; no characteristic upper crown is visible"),
+        ),
+        70_250_812 => (
+            NotRecognizable,
+            Some("Denny's conversion replaces or obscures the characteristic upper crown"),
+        ),
+        128_168_922 => (
+            NotRecognizable,
+            Some(
+                "portrait crop shows only a small edge of the building; the two-tier roof is not recognizable",
+            ),
+        ),
+        151_339_400 => (
+            NotRecognizable,
+            Some("conversion replaces the characteristic upper crown with a rectangular parapet"),
+        ),
+        158_621_246 => (
+            NotRecognizable,
+            Some(
+                "TitleMax conversion replaces the characteristic roof with a rectangular tower and curved facade",
+            ),
+        ),
+        100_477_213 => (
+            NotRecognizable,
+            Some(
+                "remodelled facade and rectangular tower obscure the characteristic two-tier form",
+            ),
+        ),
+        148_438_061 => (
+            NotRecognizable,
+            Some(
+                "conversion's rectangular tower and curved awnings leave no recognizable two-tier roof",
+            ),
+        ),
+        _ => (
+            Unreviewed,
+            Some("image has not received characteristic-roof visibility review"),
+        ),
+    }
 }
 
 fn materialize_positive(
@@ -580,15 +698,16 @@ fn materialize_positive(
         thread::sleep(Duration::from_millis(1_100));
         (rgb.width(), rgb.height(), hex_sha256(&encoded))
     };
-    let split_bucket = stable_rank(&candidate.title, 0x0053_504c_4954) % 100;
-    let split = match split_bucket {
-        0..=79 => "train",
-        80..=89 => "validation",
-        _ => "test",
-    };
+    let physical_building_id = positive_building_id(candidate.page_id, &candidate.title);
+    let split = positive_split(&candidate.title, &physical_building_id);
+    let (characteristic_roof_visibility, visibility_review_reason) =
+        positive_visibility_review(candidate.page_id);
     Ok(PositiveRecord {
         page_id: candidate.page_id,
+        characteristic_roof_visibility,
+        visibility_review_reason: visibility_review_reason.map(str::to_owned),
         title: candidate.title.clone(),
+        physical_building_id,
         split: split.to_owned(),
         relative_path,
         width,
@@ -1487,16 +1606,56 @@ fn write_positive_contact_sheet(output: &Path, records: &[PositiveRecord]) -> Re
 
 fn write_positive_readme(output: &Path, manifest: &PositiveDatasetManifest) -> Result<()> {
     let mut splits = BTreeMap::<&str, usize>::new();
+    let mut eligible_splits = BTreeMap::<&str, usize>::new();
+    let mut buildings = BTreeSet::new();
+    let mut validation_buildings = BTreeSet::new();
+    let mut eligible_buildings = BTreeSet::new();
     for record in &manifest.records {
         *splits.entry(&record.split).or_default() += 1;
+        buildings.insert(&record.physical_building_id);
+        if record.split == "validation" {
+            validation_buildings.insert(&record.physical_building_id);
+        }
+        if record.characteristic_roof_visibility.calibration_eligible() {
+            *eligible_splits.entry(&record.split).or_default() += 1;
+            eligible_buildings.insert(&record.physical_building_id);
+        }
     }
-    let text = format!(
-        "# Wikimedia Commons former-Pizza-Hut positives\n\nGenerated by `roof-data import-wikimedia-positives`. These are current uses of buildings categorised by Commons contributors as former Pizza Hut restaurants; they remain positive examples when the characteristic roof is recognisable.\n\n- Records: {}\n- Train: {}\n- Validation: {}\n- Test: {}\n- Review state: category and metadata screened; use `contact-sheet.jpg` for visual review.\n- Licensing: retain the per-image source, artist, licence, and landing-page fields in `manifest.json`.\n",
+    let eligible_count = manifest
+        .records
+        .iter()
+        .filter(|record| record.characteristic_roof_visibility.calibration_eligible())
+        .count();
+    let mut text = format!(
+        "# Wikimedia Commons former-Pizza-Hut positives\n\nGenerated by `roof-data import-wikimedia-positives`. Category membership records historical-site provenance. Only records whose `characteristic_roof_visibility` is `recognizable` are eligible for architectural presence training, calibration, and evaluation. Other records remain in the manifest and on the contact sheet, but are never negatives.\n\n- Historical records retained: {} across {} physical buildings\n- Characteristic-roof eligible: {} across {} physical buildings (train {}, validation {}, test {})\n- Provenance-only or unreviewed: {}\n- All-record split inventory: train {}, validation {} photos across {} buildings, test {}\n- Review state: category and metadata screened, with a separate per-image characteristic-roof visibility decision.\n- Split policy: every view of one physical building stays in one split, including provenance-only views.\n- Training multiplicity: each eligible image enters once by default; source-balanced epoch draws provide fresh deterministic augmentations.\n- Licensing: retain the per-image source, artist, licence, and landing-page fields in `manifest.json`.\n\n## Provenance-only records\n\nThese images document historical sites but do not visibly supervise the iconic two-tier form:\n\n",
         manifest.records.len(),
+        buildings.len(),
+        eligible_count,
+        eligible_buildings.len(),
+        eligible_splits.get("train").copied().unwrap_or(0),
+        eligible_splits.get("validation").copied().unwrap_or(0),
+        eligible_splits.get("test").copied().unwrap_or(0),
+        manifest.records.len() - eligible_count,
         splits.get("train").copied().unwrap_or(0),
         splits.get("validation").copied().unwrap_or(0),
+        validation_buildings.len(),
         splits.get("test").copied().unwrap_or(0),
     );
+    for record in manifest
+        .records
+        .iter()
+        .filter(|record| !record.characteristic_roof_visibility.calibration_eligible())
+    {
+        text.push_str(&format!(
+            "- `{}` — {}: {}\n",
+            record.page_id,
+            record.title,
+            record
+                .visibility_review_reason
+                .as_deref()
+                .unwrap_or("not calibration eligible"),
+        ));
+    }
     fs::write(output.join("README.md"), text)?;
     Ok(())
 }
@@ -1522,6 +1681,107 @@ mod tests {
     fn deterministic_rank_changes_with_seed() {
         assert_eq!(stable_rank("abc", 7), stable_rank("abc", 7));
         assert_ne!(stable_rank("abc", 7), stable_rank("abc", 8));
+    }
+
+    #[test]
+    fn reviewed_wikimedia_false_positives_are_excluded() {
+        assert!(rejected_positive_title(
+            "File:Sausage Stromboli, Fiore's Cafe, Ocala.jpg"
+        ));
+        assert!(rejected_positive_title(
+            "File:Church of Our Saviour, MCC, Boynton Beach, Florida.jpg"
+        ));
+        assert!(rejected_positive_title(
+            "File:Union Tpke Parsons Bl td (2023-04-03) 02 - KFC.jpg"
+        ));
+    }
+
+    #[test]
+    fn wikimedia_visibility_review_is_explicit_and_fails_closed() {
+        assert_eq!(
+            positive_visibility_review(166_012_896),
+            (CharacteristicRoofVisibility::Recognizable, None)
+        );
+        let (visibility, reason) = positive_visibility_review(70_250_812);
+        assert_eq!(visibility, CharacteristicRoofVisibility::NotRecognizable);
+        assert!(reason.unwrap().contains("upper crown"));
+
+        let (visibility, reason) = positive_visibility_review(u64::MAX);
+        assert_eq!(visibility, CharacteristicRoofVisibility::Unreviewed);
+        assert!(reason.unwrap().contains("not received"));
+    }
+
+    #[test]
+    fn multiple_views_of_one_wikimedia_building_share_a_split() {
+        let first = positive_building_id(
+            128168919,
+            "File:Former-Pizza Hut, Liverpool, New South Wales 03.jpg",
+        );
+        let second = positive_building_id(
+            128168921,
+            "File:Former-Pizza Hut, Liverpool, New South Wales 02.jpg",
+        );
+        assert_eq!(first, second);
+        assert_eq!(positive_split("unused", &first), "validation");
+
+        let adel_front = positive_building_id(48650272, "File:Former Pizza Hut, Adel.JPG");
+        let adel_back =
+            positive_building_id(48650274, "File:Former Pizza Hut (from back), Adel.JPG");
+        assert_eq!(adel_front, adel_back);
+        assert_eq!(positive_split("unused", &adel_front), "test");
+        assert_eq!(positive_split("unused", "commons-page-166012896"), "test");
+        assert_eq!(positive_split("unused", "commons-page-45880532"), "test");
+    }
+
+    #[test]
+    fn recognizable_holdouts_cover_three_physical_buildings_per_split() {
+        let validation = [
+            (
+                49_871_479,
+                "File:Mrs. Mac's Kitchen II, Key Largo, Florida.jpg",
+                "commons-page-49871479",
+            ),
+            (
+                128_168_919,
+                "File:Former-Pizza Hut, Liverpool, New South Wales 03.jpg",
+                "former-pizza-hut-liverpool-nsw",
+            ),
+            (
+                13_800_975,
+                "File:Gloucester, The Peel Centre restaurants Pizza Hut and Angel Chef - geograph.org.uk - 1091277.jpg",
+                "commons-page-13800975",
+            ),
+        ];
+        let test = [
+            (
+                48_650_272,
+                "File:Former Pizza Hut, Adel.JPG",
+                "former-pizza-hut-adel",
+            ),
+            (
+                166_012_896,
+                "File:Former Pizza Hut, Fort Valley.jpg",
+                "commons-page-166012896",
+            ),
+            (
+                45_880_532,
+                "File:Mexican Grill and Bar, Thomaston.JPG",
+                "commons-page-45880532",
+            ),
+        ];
+
+        for (expected_split, records) in [("validation", validation), ("test", test)] {
+            let mut buildings = BTreeSet::new();
+            for (page_id, title, building_id) in records {
+                assert_eq!(
+                    positive_visibility_review(page_id).0,
+                    CharacteristicRoofVisibility::Recognizable
+                );
+                assert_eq!(positive_split(title, building_id), expected_split);
+                buildings.insert(building_id);
+            }
+            assert_eq!(buildings.len(), 3);
+        }
     }
 
     fn review_fixture() -> DatasetManifest {

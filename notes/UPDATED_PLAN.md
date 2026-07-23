@@ -8,7 +8,11 @@
 
 Build a browser-based AR experience that recognises the classic Pizza Hut roof, tracks the user's camera as they move around a building, fits a simplified roof mesh to the observations, and renders a stable overlay.
 
-The primary target is iOS Safari. The tracking system will use both camera images and device motion sensors; it will not be an image tracker with incidental orientation hints. Android can use WebXR/ARCore when available, but the product will not depend on that path.
+The product targets modern mobile browsers rather than one mobile operating system. Use
+WebXR/ARCore when an Android browser exposes immersive AR, while browsers without WebXR—most
+notably iOS Safari—use the owned camera and motion pipeline. The fallback tracking system will use
+both camera images and device motion sensors; it will not be an image tracker with incidental
+orientation hints.
 
 The overlay needs convincing position, orientation, proportions, and stability. It does not need survey-grade dimensions. Moving the phone through space gives the visual-inertial tracker and roof fitter more parallax and acceleration information, allowing scale and alignment to settle as the scan progresses.
 
@@ -123,14 +127,15 @@ labels on a symmetric roof. Real Pizza Hut photographs provide presence
 supervision and domain grounding, while exact geometry comes from the renderer.
 Presence examples are balanced by source within each batch.
 
-The executable training sequence is concrete: first generate 32 target and 32
-ordinary-building scenes and run `roof-train --overfit`; then generate 6,000 +
-6,000 independently sampled buildings and train the complete corpus. Training
-always writes a best candidate, but only a candidate that passes the recorded
-presence, held-out real-photo recall, separate synthetic/real specificity,
-keypoint, offscreen, and perspective-fit gates is promoted
-to the `model.mpk` path used by `roof-detect`. The strict 32+32 memorisation gate
-has passed on both standard WGPU and Flex with 1.000 recall/specificity,
+The executable v2 training sequence is concrete: first generate 32 target and
+32 ordinary-building scenes and run `roof-train --overfit`; then generate 6,000
+targets and 6,000 independently sampled ordinary buildings into
+`datasets/synthetic-training-keypoints-v2/` and train into
+`artifacts/roof-model-keypoints-v2/`. Training writes diagnostic presence,
+geometry, best, and last candidates, but only a candidate that passes the
+recorded real-camera presence, threshold-free synthetic presence, keypoint,
+offscreen, and perspective-fit gates is promoted. The strict 32+32 memorisation
+gate has passed on both standard WGPU and Flex with 1.000 recall/specificity,
 PCK@3% 0.9803371, PCK@5% 0.98595506, 1.000 offscreen accuracy, and no collapsed
 pairs after backend autotune was removed from the portable path. It remains a
 diagnostic checkpoint rather than the production model. The Mac full-corpus
@@ -140,29 +145,40 @@ required Linux-side diagnosis are recorded in [`HANDOFF.md`](../HANDOFF.md).
 
 Training data should aggressively vary roof colour, repainting, weathering,
 materials, lighting, occlusion, signs, extensions, and surrounding
-architecture. The current corpus contains 12,000 independent one-view
-buildings: 6,000 targets and 6,000 ordinary negatives, split into 9,619 train,
-1,152 validation, and 1,229 test frames. For each class, the complete corpus is
-exactly 2,000 urban, 2,000 suburban, and 2,000 remote examples; this is an
-overall guarantee, not a per-split guarantee, because splits are assigned by a
-stable building hash. Across both classes, 6,208 buildings have no addition,
-5,073 have one, and 719 have two, using class-independent dining wings,
-entrance vestibules, and service annexes with flat or shed roofs. Current and
-former Pizza Hut buildings remain positive examples whenever the recognisable
-two-tier roof form survives, regardless of branding or condition. The negative
-corpus consists of ordinary houses and unrelated residential, commercial,
-civic, and industrial buildings across the same camera, lighting, weather,
-distance, and occlusion distribution. Current and former Pizza Hut locations
-are not deliberately included as negatives.
+architecture. The v2 generator has five correlated target morphologies:
+`tall_early_crown`, `near_square_tall`, `balanced_classic`, `low_wide_late`,
+and `shallow_remodelled`. Their cross-product with three day phases and five
+detailed scene domains defines 75 required coverage cells. Plan selection
+allows no more than one foreground occluder and never combines an occluder with
+deliberately partial framing; publication also fails rather than retaining a
+target with no visible roof pixels or visible bounding box. The v2 full render
+is in progress, so no final corpus counts or validation result are claimed.
 
-Full-model promotion requires test recall at least 0.95, held-out real-photo
-recall at least 0.80, overall specificity at least 0.90, curated-real-negative
-specificity at least 0.85, PCK@5% and offscreen accuracy at least 0.90,
-synthetic fit success and accepted-fit coverage at least 0.90, median fitted
-mesh RMSE no more than 0.03 of the image diagonal, and median amodal silhouette
-IoU at least 0.80. Validation real-photo recall must also reach 0.80 when
-present. These gates, rather than the existence of a candidate file, decide
-whether `roof-detect` may use a checkpoint by default.
+The retained `datasets/synthetic-training-keypoints/` corpus is historical v1:
+12,000 independent one-view buildings split into 9,619 train, 1,152 validation,
+and 1,229 test frames under the older three-profile/45-cell contract. It must
+not be substituted for the v2 path. The real-positive manifest retains 25
+historical-site images across 17 buildings, but only the 18 images across 12
+buildings whose characteristic roof is explicitly `recognizable` can supervise
+the model. Their building-isolated split is 8 train images across 6 buildings,
+6 validation images across 3, and 4 test images across 3. The remaining 7 are
+provenance-only, not negatives. Each eligible image enters once by default;
+source-balanced epoch draws supply fresh deterministic augmentation rather than
+pretending repeated views are independent buildings. The negative corpus
+consists of ordinary houses and unrelated residential, commercial, civic, and
+industrial buildings across matching nuisance distributions.
+
+Full-model v2 promotion calibrates its threshold from validation real-camera
+examples, which must support real-photo recall of at least 0.80 and curated
+real-negative specificity of at least 0.85. The frozen threshold must preserve
+those same two floors on the test split. Synthetic test presence ROC AUC and
+average precision must each reach 0.95; aggregate and cross-domain
+same-threshold rates remain diagnostics only. Geometry additionally requires
+PCK@5% and offscreen accuracy of at least 0.90, synthetic fit success at least
+0.90, accepted-fit coverage at least 0.80, median fitted-mesh RMSE no more than
+0.08 of the image diagonal, and median amodal silhouette IoU at least 0.50.
+These gates, rather than the existence of any candidate file, decide whether a
+checkpoint is deployable.
 
 The existing [recognition research](./CHATGPT_RESEARCH.md) remains a useful source for the model and dataset details. The complete offline generation pipeline, render passes, annotation schema, storage format, and validation rules are specified in the [synthetic training data plan](./SYNTHETIC_TRAINING_DATA.md). The [reference-image calibration](./REFERENCE_IMAGE_CALIBRATION.md) records how the full local photograph set maps to correlated roof morphology and appearance distributions.
 
@@ -189,11 +205,14 @@ parameters, perspective camera, projected mesh, bounds, reprojection error, and
 fit confidence. `--raw-keypoint-debug` exposes the learned points for diagnosis.
 Parameters and camera remain outputs; the user never supplies them.
 
-The single-frame fitter requires at least six usable points and rejects a
-confident fit when normalized reprojection RMSE exceeds 0.05 or fewer than two
-thirds of the observations are inliers. The ordinary CLI therefore does not
-draw a confident mesh when the visual evidence is insufficient or
-geometrically inconsistent.
+The single-frame fitter requires at least four usable points. Four- and
+five-point fits must cover all three structural rings and at least two cyclic
+corner slots so a small cluster on one roof face cannot imply an unconstrained
+complete mesh. Confidence also incorporates weighted inlier coverage, a 0.05
+normalized reprojection-RMSE ceiling, bounded full-mesh extrapolation, and a
+0.25 combined-score floor. The ordinary CLI therefore does not draw a
+confident mesh when the visual evidence is insufficient or geometrically
+inconsistent.
 
 A still image cannot exercise IMU fusion or multi-frame SLAM. The CLI
 deliberately simulates one camera frame: it proves visual recognition,

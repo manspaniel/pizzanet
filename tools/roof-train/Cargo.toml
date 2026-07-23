@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 description = "Burn trainer for one-frame retro roof detection"
 
+[features]
+default = []
+cuda = ["burn/cuda"]
+
 [dependencies]
 anyhow = "1.0.102"
 burn = { version = "0.21.0", default-features = false, features = ["std", "autodiff", "flex", "wgpu"] }
@@ -20,6 +24,7 @@ roof-model = { path = "../../crates/roof-model", features = ["pretrained"] }
 roof-training = { path = "../../crates/roof-training" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+sha2 = "0.10.9"
 synth-data = { path = "../../crates/synth-data" }
 tar = "0.4.44"
 

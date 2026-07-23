@@ -1,5 +1,8 @@
 [workspace]
 members = ["crates/*", "tools/*"]
+# references/ holds read-only clones; arael is consumed as a path dependency
+# and must not be absorbed into this workspace.
+exclude = ["references/arael"]
 resolver = "3"
 
 [workspace.package]

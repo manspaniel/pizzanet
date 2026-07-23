@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use burn::{
-    module::{ParamId, list_param_ids},
+    module::{AutodiffModule, ParamId, list_param_ids},
     nn::{
         BatchNorm, BatchNormConfig, Linear, LinearConfig, PaddingConfig2d, Relu,
         conv::{Conv2d, Conv2dConfig},
@@ -11,6 +11,7 @@ use burn::{
         pool::{AdaptiveAvgPool2d, AdaptiveAvgPool2dConfig},
     },
     prelude::*,
+    tensor::backend::AutodiffBackend,
 };
 
 #[cfg(feature = "pretrained")]
@@ -48,16 +49,46 @@ pub struct KeypointRoofOutput<B: Backend> {
     pub offscreen_logits: Tensor<B, 2>,
 }
 
+/// Geometry tensors produced without evaluating the roof-presence branch.
+///
+/// This narrower contract is used after presence has been locked during
+/// training. It makes accidentally retaining an unused presence autodiff
+/// graph impossible.
+pub struct KeypointRoofGeometryOutput<B: Backend> {
+    /// Amodal keypoint logits with shape `[batch, 12, 64, 64]`.
+    pub keypoint_logits: Tensor<B, 4>,
+    /// Per-keypoint offscreen logits with shape `[batch, 12]`.
+    pub offscreen_logits: Tensor<B, 2>,
+}
+
 /// Parameter identifiers for applying different backbone and head rates.
 ///
-/// A trainer can extract two gradient sets with
-/// `GradientsParams::from_params` and step them using independent optimizers.
+/// A trainer can extract gradient sets with `GradientsParams::from_params` and
+/// step the backbone, presence, and geometry branches independently. `heads`
+/// is retained as the complete non-backbone group for callers that use one
+/// optimizer for every prediction head.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeypointParameterGroups {
     /// All MobileNetV2 feature-extractor parameters.
     pub backbone: Vec<ParamId>,
     /// FPN, keypoint, presence, and offscreen-head parameters.
     pub heads: Vec<ParamId>,
+    /// Global hidden layer and roof-presence output parameters.
+    pub presence_heads: Vec<ParamId>,
+    /// FPN, keypoint-output, and spatial offscreen-head parameters.
+    pub geometry_heads: Vec<ParamId>,
+}
+
+/// Training-only controls for how gradients and state cross the MobileNetV2
+/// feature-pyramid boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeypointTrainingOptions {
+    /// Use the backbone's imported running mean and variance without updating
+    /// them. Convolution and BatchNorm affine parameters remain differentiable.
+    pub freeze_backbone_batch_norm: bool,
+    /// Detach the pyramid consumed by the FPN while preserving the original
+    /// stride-32 tensor, and its gradient graph, for roof presence.
+    pub detach_geometry_backbone: bool,
 }
 
 /// Configuration for the primary still-image roof observation network.
@@ -209,9 +240,102 @@ impl<B: Backend> KeypointRoofNet<B> {
     #[must_use]
     pub fn forward(&self, images: Tensor<B, 4>) -> KeypointRoofOutput<B> {
         let features = self.features.forward_pyramid(images);
-        let spatial = self
-            .spatial_projection
-            .forward(features.stride_thirty_two.clone());
+        self.forward_from_features(features, false)
+    }
+
+    /// Training forward that preserves the pretrained MobileNetV2 running
+    /// statistics while keeping its convolution and BatchNorm affine
+    /// parameters trainable.
+    ///
+    /// Only the feature extractor uses frozen population statistics. The FPN
+    /// and prediction heads continue to use normal backend-selected training
+    /// behavior so their BatchNorm state can adapt from random initialization.
+    #[must_use]
+    pub fn forward_training_with_frozen_backbone_batch_norm(
+        &self,
+        images: Tensor<B, 4>,
+    ) -> KeypointRoofOutput<B> {
+        self.forward_training_with_options(
+            images,
+            KeypointTrainingOptions {
+                freeze_backbone_batch_norm: true,
+                detach_geometry_backbone: false,
+            },
+        )
+    }
+
+    /// Training forward with explicit MobileNetV2 state and gradient controls.
+    ///
+    /// When geometry detachment is enabled, presence consumes the original
+    /// differentiable stride-32 feature tensor. Independent detached copies of
+    /// all four pyramid levels feed the FPN, keypoint head, and offscreen head.
+    /// Geometry-only losses therefore cannot update the backbone, while
+    /// presence loss still can.
+    #[must_use]
+    pub fn forward_training_with_options(
+        &self,
+        images: Tensor<B, 4>,
+        options: KeypointTrainingOptions,
+    ) -> KeypointRoofOutput<B> {
+        let features = if options.freeze_backbone_batch_norm {
+            self.features.forward_pyramid_frozen_stats(images)
+        } else {
+            self.features.forward_pyramid(images)
+        };
+        self.forward_from_features(features, options.detach_geometry_backbone)
+    }
+
+    fn forward_from_features(
+        &self,
+        features: mobilenet::MobileNetPyramid<B>,
+        detach_geometry_backbone: bool,
+    ) -> KeypointRoofOutput<B> {
+        let presence_features = features.stride_thirty_two.clone();
+        let geometry_stride_four = if detach_geometry_backbone {
+            features.stride_four.detach()
+        } else {
+            features.stride_four
+        };
+        let geometry_stride_eight = if detach_geometry_backbone {
+            features.stride_eight.detach()
+        } else {
+            features.stride_eight
+        };
+        let geometry_stride_sixteen = if detach_geometry_backbone {
+            features.stride_sixteen.detach()
+        } else {
+            features.stride_sixteen
+        };
+        let geometry_stride_thirty_two = if detach_geometry_backbone {
+            features.stride_thirty_two.detach()
+        } else {
+            features.stride_thirty_two
+        };
+        let geometry = self.forward_geometry_from_features(mobilenet::MobileNetPyramid {
+            stride_four: geometry_stride_four,
+            stride_eight: geometry_stride_eight,
+            stride_sixteen: geometry_stride_sixteen,
+            stride_thirty_two: geometry_stride_thirty_two,
+        });
+
+        let batch = presence_features.dims()[0];
+        let global = self.avg_pool.forward(presence_features).flatten::<2>(1, 3);
+        let global = self.activation.forward(self.global_hidden.forward(global));
+        let presence_logits = self.presence_output.forward(global).reshape([batch]);
+
+        debug_assert_eq!(geometry.keypoint_logits.dims()[1], KEYPOINT_COUNT);
+        KeypointRoofOutput {
+            presence_logits,
+            keypoint_logits: geometry.keypoint_logits,
+            offscreen_logits: geometry.offscreen_logits,
+        }
+    }
+
+    fn forward_geometry_from_features(
+        &self,
+        features: mobilenet::MobileNetPyramid<B>,
+    ) -> KeypointRoofGeometryOutput<B> {
+        let spatial = self.spatial_projection.forward(features.stride_thirty_two);
         let spatial = self.decoder_one.forward(spatial, features.stride_sixteen);
         let spatial = self.decoder_two.forward(spatial, features.stride_eight);
         let spatial = self.decoder_three.forward(spatial, features.stride_four);
@@ -228,17 +352,8 @@ impl<B: Backend> KeypointRoofNet<B> {
             .forward(self.offscreen_hidden.forward(offscreen));
         let offscreen_logits = self.offscreen_output.forward(offscreen);
 
-        let batch = features.stride_thirty_two.dims()[0];
-        let global = self
-            .avg_pool
-            .forward(features.stride_thirty_two)
-            .flatten::<2>(1, 3);
-        let global = self.activation.forward(self.global_hidden.forward(global));
-        let presence_logits = self.presence_output.forward(global).reshape([batch]);
-
         debug_assert_eq!(keypoint_logits.dims()[1], KEYPOINT_COUNT);
-        KeypointRoofOutput {
-            presence_logits,
+        KeypointRoofGeometryOutput {
             keypoint_logits,
             offscreen_logits,
         }
@@ -249,20 +364,71 @@ impl<B: Backend> KeypointRoofNet<B> {
     pub fn parameter_groups(&self) -> KeypointParameterGroups {
         let backbone = list_param_ids(&self.features);
         let backbone_set = backbone.iter().copied().collect::<HashSet<_>>();
+        let presence_set = list_param_ids(&self.global_hidden)
+            .into_iter()
+            .chain(list_param_ids(&self.presence_output))
+            .collect::<HashSet<_>>();
         let heads = list_param_ids(self)
             .into_iter()
             .filter(|id| !backbone_set.contains(id))
-            .collect();
-        KeypointParameterGroups { backbone, heads }
+            .collect::<Vec<_>>();
+        let presence_heads = heads
+            .iter()
+            .copied()
+            .filter(|id| presence_set.contains(id))
+            .collect::<Vec<_>>();
+        let geometry_heads = heads
+            .iter()
+            .copied()
+            .filter(|id| !presence_set.contains(id))
+            .collect::<Vec<_>>();
+        KeypointParameterGroups {
+            backbone,
+            heads,
+            presence_heads,
+            geometry_heads,
+        }
+    }
+}
+
+impl<B: AutodiffBackend> KeypointRoofNet<B> {
+    /// Runs geometry training with the backbone entirely outside autodiff.
+    ///
+    /// The frozen MobileNetV2 is evaluated on the inner backend, then its four
+    /// feature levels are wrapped as untracked leaves before entering the
+    /// trainable FPN and geometry heads. The presence head is not evaluated.
+    /// This avoids retaining an unused backbone/presence graph between
+    /// geometry-only optimizer steps.
+    #[must_use]
+    pub fn forward_geometry_training_with_frozen_backbone(
+        &self,
+        images: Tensor<B, 4>,
+    ) -> KeypointRoofGeometryOutput<B> {
+        let features = self
+            .features
+            .valid()
+            .forward_pyramid_frozen_stats(images.inner());
+        self.forward_geometry_from_features(mobilenet::MobileNetPyramid {
+            stride_four: Tensor::from_inner(features.stride_four),
+            stride_eight: Tensor::from_inner(features.stride_eight),
+            stride_sixteen: Tensor::from_inner(features.stride_sixteen),
+            stride_thirty_two: Tensor::from_inner(features.stride_thirty_two),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::backend::NdArray;
+    use burn::{
+        backend::{Autodiff, Flex, NdArray, flex::FlexDevice},
+        optim::GradientsParams,
+        tensor::Tolerance,
+    };
 
     type TestBackend = NdArray<f32>;
+    type TestAutodiffBackend = Autodiff<TestBackend>;
+    type TestFlexAutodiffBackend = Autodiff<Flex>;
 
     #[test]
     fn output_contract_has_expected_channels_and_stride() {
@@ -286,11 +452,204 @@ mod tests {
         let groups = model.parameter_groups();
         assert!(!groups.backbone.is_empty());
         assert!(!groups.heads.is_empty());
+        assert!(!groups.presence_heads.is_empty());
+        assert!(!groups.geometry_heads.is_empty());
 
         let backbone = groups.backbone.iter().copied().collect::<HashSet<_>>();
         let heads = groups.heads.iter().copied().collect::<HashSet<_>>();
+        let presence = groups
+            .presence_heads
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let geometry = groups
+            .geometry_heads
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(backbone.len(), groups.backbone.len());
+        assert_eq!(heads.len(), groups.heads.len());
+        assert_eq!(presence.len(), groups.presence_heads.len());
+        assert_eq!(geometry.len(), groups.geometry_heads.len());
         assert!(backbone.is_disjoint(&heads));
+        assert!(backbone.is_disjoint(&presence));
+        assert!(backbone.is_disjoint(&geometry));
+        assert!(presence.is_disjoint(&geometry));
+        assert_eq!(heads, presence.union(&geometry).copied().collect());
         assert_eq!(backbone.len() + heads.len(), list_param_ids(&model).len());
+
+        let expected_presence = list_param_ids(&model.global_hidden)
+            .into_iter()
+            .chain(list_param_ids(&model.presence_output))
+            .collect::<HashSet<_>>();
+        assert_eq!(presence, expected_presence);
+
+        let expected_geometry = list_param_ids(&model.spatial_projection)
+            .into_iter()
+            .chain(list_param_ids(&model.decoder_one))
+            .chain(list_param_ids(&model.decoder_two))
+            .chain(list_param_ids(&model.decoder_three))
+            .chain(list_param_ids(&model.keypoint_output))
+            .chain(list_param_ids(&model.offscreen_hidden))
+            .chain(list_param_ids(&model.offscreen_output))
+            .collect::<HashSet<_>>();
+        assert_eq!(geometry, expected_geometry);
+    }
+
+    #[test]
+    fn detached_geometry_and_offscreen_losses_do_not_reach_backbone() {
+        let device = Default::default();
+        let model = KeypointRoofNetConfig::new().init::<TestAutodiffBackend>(&device);
+        let groups = model.parameter_groups();
+        let input = Tensor::random(
+            [1, 3, 32, 32],
+            burn::tensor::Distribution::Uniform(-1.0, 1.0),
+            &device,
+        );
+        let output = model.forward_training_with_options(
+            input,
+            KeypointTrainingOptions {
+                freeze_backbone_batch_norm: true,
+                detach_geometry_backbone: true,
+            },
+        );
+
+        let mut gradients =
+            (output.keypoint_logits.sum() + output.offscreen_logits.sum()).backward();
+        let backbone = GradientsParams::from_params(&mut gradients, &model, &groups.backbone);
+        assert!(
+            backbone.is_empty(),
+            "detached geometry branches produced {} backbone gradients",
+            backbone.len()
+        );
+
+        let presence = GradientsParams::from_params(&mut gradients, &model, &groups.presence_heads);
+        assert!(
+            presence.is_empty(),
+            "geometry-only backward must not reach presence-head parameters"
+        );
+
+        let geometry_modules = [
+            (
+                "spatial projection",
+                list_param_ids(&model.spatial_projection),
+            ),
+            ("decoder one", list_param_ids(&model.decoder_one)),
+            ("decoder two", list_param_ids(&model.decoder_two)),
+            ("decoder three", list_param_ids(&model.decoder_three)),
+            ("keypoint output", list_param_ids(&model.keypoint_output)),
+            ("offscreen hidden", list_param_ids(&model.offscreen_hidden)),
+            ("offscreen output", list_param_ids(&model.offscreen_output)),
+        ];
+        for (name, ids) in geometry_modules {
+            let branch = GradientsParams::from_params(&mut gradients, &model, &ids);
+            assert!(
+                !branch.is_empty(),
+                "geometry and offscreen losses must reach {name} parameters"
+            );
+        }
+    }
+
+    #[test]
+    fn frozen_backbone_geometry_forward_matches_detached_training_forward() {
+        let device = FlexDevice;
+        let model = KeypointRoofNetConfig::new().init::<TestFlexAutodiffBackend>(&device);
+        let input = Tensor::random(
+            [1, 3, 32, 32],
+            burn::tensor::Distribution::Uniform(-1.0, 1.0),
+            &device,
+        );
+
+        let expected = model.forward_training_with_options(
+            input.clone(),
+            KeypointTrainingOptions {
+                freeze_backbone_batch_norm: true,
+                detach_geometry_backbone: true,
+            },
+        );
+        let actual = model.forward_geometry_training_with_frozen_backbone(input);
+
+        expected
+            .keypoint_logits
+            .to_data()
+            .assert_approx_eq::<f32>(&actual.keypoint_logits.to_data(), Tolerance::default());
+        expected
+            .offscreen_logits
+            .to_data()
+            .assert_approx_eq::<f32>(&actual.offscreen_logits.to_data(), Tolerance::default());
+    }
+
+    #[test]
+    fn inner_backbone_geometry_forward_only_tracks_geometry_parameters() {
+        let device = FlexDevice;
+        let model = KeypointRoofNetConfig::new().init::<TestFlexAutodiffBackend>(&device);
+        let groups = model.parameter_groups();
+        let input = Tensor::random(
+            [1, 3, 32, 32],
+            burn::tensor::Distribution::Uniform(-1.0, 1.0),
+            &device,
+        )
+        .require_grad();
+        let output = model.forward_geometry_training_with_frozen_backbone(input.clone());
+
+        let mut gradients =
+            (output.keypoint_logits.sum() + output.offscreen_logits.sum()).backward();
+        assert!(
+            input.grad(&gradients).is_none(),
+            "the inner-backend backbone must sever the input autodiff graph"
+        );
+        assert!(
+            GradientsParams::from_params(&mut gradients, &model, &groups.backbone).is_empty(),
+            "the inner-backend backbone must not create backbone gradients"
+        );
+        assert!(
+            GradientsParams::from_params(&mut gradients, &model, &groups.presence_heads).is_empty(),
+            "the geometry-only forward must not evaluate or track the presence head"
+        );
+        assert!(
+            !GradientsParams::from_params(&mut gradients, &model, &groups.geometry_heads)
+                .is_empty(),
+            "geometry-only backward must reach geometry parameters"
+        );
+    }
+
+    #[test]
+    fn presence_loss_keeps_backbone_and_presence_head_differentiable() {
+        let device = Default::default();
+        let model = KeypointRoofNetConfig::new().init::<TestAutodiffBackend>(&device);
+        let groups = model.parameter_groups();
+        let input = Tensor::random(
+            [1, 3, 32, 32],
+            burn::tensor::Distribution::Uniform(-1.0, 1.0),
+            &device,
+        );
+        let output = model.forward_training_with_options(
+            input,
+            KeypointTrainingOptions {
+                freeze_backbone_batch_norm: true,
+                detach_geometry_backbone: true,
+            },
+        );
+
+        let mut gradients = output.presence_logits.sum().backward();
+        let backbone = GradientsParams::from_params(&mut gradients, &model, &groups.backbone);
+        assert!(
+            !backbone.is_empty(),
+            "presence loss must reach backbone parameters"
+        );
+
+        let presence = GradientsParams::from_params(&mut gradients, &model, &groups.presence_heads);
+        assert_eq!(
+            presence.len(),
+            groups.presence_heads.len(),
+            "presence loss must reach every presence-head parameter"
+        );
+
+        let geometry = GradientsParams::from_params(&mut gradients, &model, &groups.geometry_heads);
+        assert!(
+            geometry.is_empty(),
+            "presence-only backward must not reach geometry-head parameters"
+        );
     }
 
     #[test]

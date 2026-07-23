@@ -127,8 +127,10 @@ fn deterministic_sweep_covers_every_correlated_profile() {
         observed,
         BTreeSet::from([
             RoofMorphology::TallEarlyCrown,
+            RoofMorphology::NearSquareTall,
             RoofMorphology::BalancedClassic,
             RoofMorphology::LowWideLate,
+            RoofMorphology::ShallowRemodelled,
         ])
     );
 }
@@ -137,8 +139,10 @@ fn deterministic_sweep_covers_every_correlated_profile() {
 fn each_profile_is_byte_deterministic_for_fixed_seeds() {
     for morphology in [
         RoofMorphology::TallEarlyCrown,
+        RoofMorphology::NearSquareTall,
         RoofMorphology::BalancedClassic,
         RoofMorphology::LowWideLate,
+        RoofMorphology::ShallowRemodelled,
     ] {
         let mut config = GeneratorConfig::default();
         config.sequence.frame_count = 2;
@@ -162,6 +166,28 @@ fn each_profile_is_byte_deterministic_for_fixed_seeds() {
             );
         }
     }
+}
+
+#[test]
+fn new_profiles_define_non_overlapping_height_extremes() {
+    let config = GeneratorConfig::default();
+    let profile = |morphology| {
+        config
+            .roof
+            .profiles
+            .iter()
+            .find(|profile| profile.morphology == morphology)
+            .copied()
+            .unwrap()
+    };
+    let tall = profile(RoofMorphology::NearSquareTall);
+    let remodelled = profile(RoofMorphology::ShallowRemodelled);
+
+    assert!(tall.footprint_aspect_ratio.max <= 1.18);
+    assert!(tall.lower_rise_m.min + tall.upper_rise_m.min > 5.9);
+    assert!(remodelled.lower_rise_m.max + remodelled.upper_rise_m.max < 5.0);
+    assert!(remodelled.shoulder_width_fraction.max >= 0.68);
+    assert!(remodelled.crown_top_width_fraction.max >= 0.97);
 }
 
 #[test]

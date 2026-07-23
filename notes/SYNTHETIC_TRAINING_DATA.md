@@ -12,10 +12,15 @@ the gallery is the normal way to review appearance coverage without unpacking
 tar shards by hand.
 
 The checked workspace contains a 32-target + 32-negative memorisation corpus
-and a 6,000 + 6,000 independent-building training corpus. The full corpus has
-one view per building, 48 shards, 54,000 aligned artifacts, and 9,619 train,
-1,152 validation, and 1,229 test frames. The reproducible commands and
-model-promotion status are kept in [roof training and single-frame
+and the completed active corpus at
+`datasets/synthetic-training-keypoints-v2/`. The v2 corpus contains 6,000
+independent target buildings and 6,000 independent ordinary-building
+negatives, with one view per building, 48 shards, 54,000 aligned artifacts,
+and 9,547 train, 1,226 validation, and 1,227 test frames. The retained
+`datasets/synthetic-training-keypoints/` corpus is historical v1: its
+9,619/1,152/1,229 split and older three-morphology, 45-cell contract must not be
+described as the current corpus. The reproducible commands and model-promotion
+status are kept in [roof training and single-frame
 inference](./TRAINING_AND_INFERENCE.md). Generated data is local and gitignored;
 a model is not considered available merely because a training command exists.
 
@@ -92,16 +97,16 @@ Every sample must be reproducible from its generator version, configuration,
 asset hashes, and random seed. `roof-synth` does not rely on an accidental
 Monte Carlo hit for the core regimes. Detailed city/urban, suburban, and
 roadside/remote domains are grouped into the plan's three required scene
-regimes. In the current 6,000 + 6,000 corpus, targets contain exactly 2,000
+regimes. In the active v2 6,000 + 6,000 corpus, targets contain exactly 2,000
 urban, 2,000 suburban, and 2,000 remote scenes, and negatives repeat those
 exact counts; the combined counts are 4,000 each. This exact balance applies to
 the complete class and combined corpora, not independently within train,
-validation, and test. Stable hash assignment produces 9,619/1,152/1,229
+validation, and test. Stable hash assignment produces 9,547/1,226/1,227
 combined split counts, and their natural regime variation is retained rather
-than resampled. A minimum of 54 target sequences is needed to combine that
-exact overall balance with all 45 detailed roof-morphology × day-phase × domain
-cells. The target coverage statement is persisted in `coverage.json`; class,
-combined, and split counts are persisted in `scene-regime-balance.json`.
+than resampled. The five roof morphologies, three day phases, and five detailed
+scene domains define 75 required positive coverage cells; v2 covers all 75.
+The target coverage statement is persisted in `coverage.json`; class, combined,
+and split counts are persisted in `scene-regime-balance.json`.
 
 ## Generated records
 
@@ -161,6 +166,15 @@ probabilities or 2D cut-outs:
   footprint. Both projected and sampled WGPU depth values are converted back to
   linear camera distance, with a tolerance based on world units per pixel. A
   fixed epsilon in nonlinear depth space is not acceptable at outdoor ranges.
+
+The active v2 selector permits at most one foreground occluder and never
+combines deliberately partial framing with a foreground occluder. Publication
+also refuses a target frame with zero visible roof pixels or no visible
+bounding box. A completed audit of all 6,000 v2 targets found zero invisible
+frames, 27 below 25% visible, 474 below 50% visible, 1,195 truncated, 520
+full-width, and a median visible fraction of 0.718; these categories may
+overlap. The trainer separately excludes the three train-split targets below
+its 5% visible-fraction floor.
 
 The amodal raster is persisted as `amodal_roof_mask.png` beside the visible
 mask. Both visible and amodal in-frame bounds are stored with every frame, so a
@@ -243,24 +257,32 @@ because these generic materials and skies are not evaluation examples.
 
 ### Roof and building
 
-- Three weighted, correlated silhouette families derived from all 18 local
-  references: `tall_early_crown`, `balanced_classic`, and `low_wide_late`.
+- Five weighted, correlated silhouette families derived from all 18 local
+  references: `tall_early_crown` (24), `near_square_tall` (11),
+  `balanced_classic` (38), `low_wide_late` (18), and `shallow_remodelled` (9).
   Each family jointly constrains footprint aspect, overhang, shoulder break,
   lower rise, upper rise, and crown taper so random draws remain plausible.
   The selected family is persisted in every sequence record.
 - Footprint, eaves, overhang, roof pitch, and crown dimensions.
 - Small asymmetries, repairs, damage, and partial remodelling. The configured
-  addition weights are 52% none, 42% one, and 6% two. The current full corpus
-  realizes 6,208 buildings with none, 5,073 with one, and 719 with two. Its
-  6,511 additions comprise 2,891 broad dining wings, 1,489 glazed entrance
-  vestibules, and 2,131 service annexes; 3,777 have flat roofs and 2,734 have
-  host-facing shed roofs. Addition kind, dimensions, façade, and roof are
-  sampled from a target-class-independent RNG stream. The target/negative
-  counts are respectively 3,086/3,122 with none, 2,547/2,526 with one, and
-  367/352 with two.
-- Original red, repainted, faded, stained, patched, metal, tile, and replacement
-  roof finishes. Public normal and ARM maps remain physically consistent when
-  diffuse colour is tinted.
+  addition weights are 52% none, 42% one, and 6% two. Addition kind,
+  dimensions, façade, and roof are sampled from a
+  target-class-independent RNG stream. The following realized counts are a
+  historical v1 audit only: 6,208 buildings with no addition, 5,073 with one,
+  and 719 with two; 6,511 additions split into 2,891 broad dining wings, 1,489
+  glazed entrance vestibules, and 2,131 service annexes; and 3,777 flat versus
+  2,734 host-facing shed roofs. The historical v1 target/negative counts are
+  respectively 3,086/3,122 with none, 2,547/2,526 with one, and 367/352 with
+  two. These counts describe `datasets/synthetic-training-keypoints/`, not v2.
+- Nine roof-colour anchors cover original and faded red, terracotta orange,
+  weathered tan/brown, light metal, neutral and dark repainting, blue, and
+  green. For each scene, every sRGB channel is sampled deterministically around
+  its selected anchor with 0.08–0.14 configured variation. This produces
+  continuous colour variation within each named material rather than one fixed
+  swatch. Wall palettes use the same mechanism with 0.08–0.10 variation.
+  Public normal and ARM maps remain physically consistent when diffuse colour
+  is tinted. A contract test obtains more than 48 distinct roof and wall
+  colours from 64 deterministic seeds while checking the configured bounds.
 - Brick, render, cladding, and repaint wall palettes; glazing fraction and tint;
   entrance width; window bands; canopies; gutters; downpipes; and weathering.
 - A weighted signage state independent of the recognition label: retained Pizza
@@ -301,13 +323,14 @@ uniform draws:
 
 ### Camera
 
-The checked still-image corpus deliberately stores one frame per independently
-sampled building. It samples a pinhole pose, 52–76 degree horizontal field of
-view, apparent scale, and framing intent for that frame. The recorded 12,000
-views comprise 2,068 distant, 6,118 normal, 2,019 close, and 1,795 deliberately
-partial compositions. Although path kind and zoom intent remain in the
-sequence contract for future multi-frame datasets, a one-frame sample cannot
-demonstrate temporal camera motion or zoom.
+Both the active v2 and retained v1 still-image corpora deliberately store one
+frame per independently sampled building. Each samples a pinhole pose, 52–76
+degree horizontal field of view, apparent scale, and framing intent for that
+frame. The recorded composition counts of 2,068 distant, 6,118 normal, 2,019
+close, and 1,795 deliberately partial views are a historical v1 audit only;
+they do not claim the realized v2 composition distribution. Although path kind
+and zoom intent remain in the sequence contract for future multi-frame
+datasets, a one-frame sample cannot demonstrate temporal camera motion or zoom.
 
 - Camera distance and height remain representative of a person standing outside
   the site, while target-width goals select an appropriate distance for the
@@ -451,8 +474,18 @@ cargo run -p roof-synth -- generate \
 cargo run -p roof-synth -- validate datasets/synthetic-overfit-balanced
 ```
 
-For the complete still-image corpus, change the dataset ID/output to
-`synthetic-training-keypoints` and pass `--targets 6000 --negatives 6000`.
+The completed full-corpus command uses the distinct v2 ID and output path:
+
+```bash
+cargo run --release -p roof-synth -- generate \
+  --output datasets/synthetic-training-keypoints-v2 \
+  --dataset-id synthetic-training-keypoints-v2 \
+  --seed 42 --targets 6000 --negatives 6000 --frames 1 \
+  --width 640 --height 480 --samples-per-shard 256
+
+cargo run --release -p roof-synth -- validate \
+  datasets/synthetic-training-keypoints-v2
+```
 
 Generation writes to a staging directory, validates complete sequences, and
 publishes the output directory atomically. It refuses to overwrite a non-empty
@@ -466,10 +499,11 @@ the result directly. The gallery is derived from bytes and annotations already
 written to the shards; it must never rerender a scene or silently use different
 transforms.
 
-Selection is deterministic and stratified. For a full training run, the gallery
-shows every one of the 45 detailed roof-morphology/day-phase/domain cells—all three
-silhouettes in day, twilight, and night across city, urban, suburban, roadside,
-and remote sites—and includes examples of clear, overcast, hazy, and wet
+Selection is deterministic and stratified. For the active v2 full training run,
+the gallery shows every one of the 75 detailed
+roof-morphology/day-phase/domain cells—all five silhouettes in day, twilight,
+and night across city, urban, suburban, roadside, and remote sites—and includes
+examples of clear, overcast, hazy, and wet
 conditions. It also exposes signage states, roof, façade, and ground material
 families, the selected HDR IDs, narrow/standard/wide fields of view,
 fixed and smooth zoom, centred and four partial-shot directions, context-density
@@ -499,6 +533,10 @@ without changing the stored label images. The gallery is review output, not a
 substitute for the original RGB or training targets.
 
 ## Validation
+
+The completed v2 corpus passes `roof-synth validate` with zero warnings. Its
+persisted coverage report records 75/75 required cells, full coverage achieved,
+and exact overall urban/suburban/remote balance.
 
 Generation must fail or explicitly classify a sample when:
 

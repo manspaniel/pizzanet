@@ -9,7 +9,9 @@ use crate::{
     SequenceRecord, SplitKey, TargetKind, U32Range, Vec3, Visibility, ZoomBehavior,
     sampling::{
         GROUND_EDGE_MARGIN_M, OCCLUDER_TARGET_CLEARANCE_M, ROOFTOP_EDGE_CLEARANCE_M,
-        actual_roof_envelope, camera_point_intersects_scene, camera_segment_intersects_scene,
+        actual_roof_envelope, camera_point_intersects_occluders, camera_point_intersects_scene,
+        camera_point_intersects_vegetation, camera_segment_intersects_occluders,
+        camera_segment_intersects_scene, camera_segment_intersects_vegetation,
         camera_view_intersects_background, rotated_half_extents, sampled_content_half_extent,
     },
 };
@@ -597,6 +599,20 @@ fn validate_camera_position(
             "camera must clear the target wall volume and background-building bounds",
         );
     }
+    if camera_point_intersects_vegetation(position, &scene.composition.vegetation) {
+        report.error(
+            "camera_vegetation_intersection",
+            path,
+            "camera must clear conservative composition-vegetation bounds",
+        );
+    }
+    if camera_point_intersects_occluders(position, &scene.occluders) {
+        report.error(
+            "camera_occluder_intersection",
+            path,
+            "camera must clear sampled occluder bounds",
+        );
+    }
     if camera_view_intersects_background(
         position,
         scene.building,
@@ -623,6 +639,24 @@ fn validate_camera_position(
             "camera_path_scene_intersection",
             path,
             "camera path segment must clear target and background-building bounds",
+        );
+    }
+    if let Some(start) = previous
+        && camera_segment_intersects_vegetation(start, position, &scene.composition.vegetation)
+    {
+        report.error(
+            "camera_path_vegetation_intersection",
+            path,
+            "camera path segment must clear conservative composition-vegetation bounds",
+        );
+    }
+    if let Some(start) = previous
+        && camera_segment_intersects_occluders(start, position, &scene.occluders)
+    {
+        report.error(
+            "camera_path_occluder_intersection",
+            path,
+            "camera path segment must clear sampled occluder bounds",
         );
     }
 }
@@ -1806,6 +1840,15 @@ fn validate_materials(report: &mut ValidationReport, path: &str, materials: &[Ma
                 "invalid_material_color",
                 format!("{item_path}.base_color_srgb"),
                 "sRGB channels must be finite and inside [0, 1]",
+            );
+        }
+        if !material.base_color_variation.is_finite()
+            || !(0.0..=0.5).contains(&material.base_color_variation)
+        {
+            report.error(
+                "invalid_material_color_variation",
+                format!("{item_path}.base_color_variation"),
+                "base-colour variation must be finite and inside [0, 0.5]",
             );
         }
         validate_range(
