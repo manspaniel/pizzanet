@@ -84,7 +84,7 @@ struct ARSessionView: UIViewRepresentable {
         }) {
             configuration.videoFormat = wideFormat
         }
-        view.session.delegate = recorder
+        view.session.delegate = recorder.core
         view.debugOptions = [.showFeaturePoints, .showWorldOrigin]
         view.session.run(configuration)
         return view

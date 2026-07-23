@@ -3,37 +3,34 @@
 //  ARTest2
 //
 //  Records an ARKit session as BOTH:
-//  1. Ground truth: per-frame ARKit camera poses (centimetre-accurate VIO) →
-//     arkit-poses.ndjson
+//  1. Ground truth: per-frame ARKit camera poses -> arkit-poses.ndjson
 //  2. A pizzanet web-format tracking recording (manifest + sensor-events
 //     + tracker-frames + tracker-luma.gray), with camera luma taken from the
 //     same ARKit frames and Safari-convention sensor events synthesized from
-//     CoreMotion — so the Rust tracker can be replayed offline against the
-//     ARKit truth for the exact same motion.
+//     CoreMotion.
 //
-//  Everything is stamped with the same boot-time clock (ARFrame.timestamp and
-//  CMDeviceMotion.timestamp share it), so the two streams are inherently
-//  synchronized.
+//  Both streams share the boot-time clock (ARFrame.timestamp and
+//  CMDeviceMotion.timestamp use it), so they are inherently synchronized.
+//
+//  Concurrency: `RecordingCore` is explicitly nonisolated (the project uses
+//  default main-actor isolation) and guards all recording state with a lock —
+//  ARKit and CoreMotion callbacks arrive on their own queues. The main-actor
+//  `RecordingSession` holds only the SwiftUI-facing state, updated via
+//  `onUpdate` hops to the main queue.
 //
 
 import ARKit
+import Combine
 import CoreMotion
 import Foundation
 
-@MainActor
-final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
-    /// Where the pizzanet dev server accepts recordings (Vite proxies /api).
-    static let uploadURL = URL(string: "https://danlinux.warg-balance.ts.net/api/dev/recordings")!
-
-    /// Tracker frame geometry, matching the web app's capture settings.
-    static let trackerFrameWidth = 240
-    static let targetFrameIntervalSeconds = 1.0 / 30.0
-
-    enum Phase: Equatable {
+/// SwiftUI-facing state.
+final class RecordingSession: ObservableObject {
+    nonisolated enum Phase: Equatable {
         case idle
         case recording
         case uploading
-        case done(String)
+        case done
         case failed(String)
     }
 
@@ -42,12 +39,50 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
     @Published var sensorEventCount = 0
     @Published var arkitTrackingState = "—"
 
+    let core: RecordingCore
+
+    init() {
+        core = RecordingCore()
+        core.onUpdate = { [weak self] update in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let phase = update.phase { self.phase = phase }
+                if let frames = update.frameCount { self.frameCount = frames }
+                if let sensors = update.sensorEventCount { self.sensorEventCount = sensors }
+                if let tracking = update.trackingState { self.arkitTrackingState = tracking }
+            }
+        }
+    }
+
+    func toggleRecording() {
+        if phase == .recording {
+            core.stopAndUpload()
+        } else {
+            core.start()
+        }
+    }
+}
+
+/// All recording state and sensor plumbing, off the main actor.
+nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked Sendable {
+    static let uploadURL = URL(string: "https://danlinux.warg-balance.ts.net/api/dev/recordings")!
+    static let trackerFrameWidth = 240
+    static let targetFrameIntervalSeconds = 1.0 / 30.0
+
+    struct Update: Sendable {
+        var phase: RecordingSession.Phase?
+        var frameCount: Int?
+        var sensorEventCount: Int?
+        var trackingState: String?
+    }
+
+    var onUpdate: (@Sendable (Update) -> Void)?
+
     private let motionManager = CMMotionManager()
     private let motionQueue = OperationQueue()
+    private let lock = NSLock()
 
-    // Recording state. Sensor callbacks land on motionQueue; frame callbacks
-    // on the session's queue; both funnel through the lock below.
-    private let stateLock = NSLock()
+    // Guarded by `lock`.
     private var isRecording = false
     private var startUptimeSeconds: TimeInterval = 0
     private var startWallClock = Date()
@@ -60,22 +95,15 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
     private var lumaFileURL: URL?
     private var recordedFrameCount = 0
     private var nextFrameId: UInt32 = 1
-    private var cameraIntrinsics: simd_float3x3?
-    private var cameraImageSize = CGSize.zero
+    private var cameraFocalPixels: Double = 0
+    private var cameraImageWidth = 0
+    private var cameraImageHeight = 0
 
     // MARK: - Controls
 
-    func toggleRecording() {
-        if isRecording {
-            stopAndUpload()
-        } else {
-            start()
-        }
-    }
-
-    private func start() {
-        stateLock.lock()
-        defer { stateLock.unlock() }
+    func start() {
+        lock.lock()
+        defer { lock.unlock() }
         guard !isRecording else { return }
 
         sensorEventLines = []
@@ -105,15 +133,13 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
         }
 
         isRecording = true
-        phase = .recording
-        frameCount = 0
-        sensorEventCount = 0
+        onUpdate?(Update(phase: .recording, frameCount: 0, sensorEventCount: 0))
     }
 
-    private func stopAndUpload() {
-        stateLock.lock()
+    func stopAndUpload() {
+        lock.lock()
         guard isRecording else {
-            stateLock.unlock()
+            lock.unlock()
             return
         }
         isRecording = false
@@ -125,75 +151,78 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
         let sensorEvents = sensorEventLines.joined(separator: "\n")
         let frameEvents = frameEventLines.joined(separator: "\n")
         let arkitPoses = arkitPoseLines.joined(separator: "\n")
-        let manifest = buildManifest(durationMilliseconds: durationMilliseconds)
+        let manifest = buildManifestLocked(durationMilliseconds: durationMilliseconds)
         let lumaURL = lumaFileURL
         let frames = recordedFrameCount
-        stateLock.unlock()
+        lock.unlock()
 
         guard frames > 10, let lumaURL else {
-            phase = .failed("Recording too short.")
+            onUpdate?(Update(phase: .failed("Recording too short.")))
             return
         }
-        phase = .uploading
-        Task {
+        onUpdate?(Update(phase: .uploading))
+        let update = onUpdate
+        Task.detached(priority: .userInitiated) {
             do {
-                let response = try await Self.upload(
+                try await RecordingCore.upload(
                     manifest: manifest,
                     sensorEvents: sensorEvents,
                     frameEvents: frameEvents,
                     arkitPoses: arkitPoses,
                     lumaFileURL: lumaURL
                 )
-                self.phase = .done(response)
+                update?(Update(phase: .done))
             } catch {
-                self.phase = .failed(error.localizedDescription)
+                update?(Update(phase: .failed(error.localizedDescription)))
             }
         }
     }
 
     // MARK: - ARKit frames
 
-    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let trackingLabel: String
         switch frame.camera.trackingState {
         case .normal: trackingLabel = "normal"
         case .notAvailable: trackingLabel = "unavailable"
-        case .limited(let reason): trackingLabel = "limited(\(reason))"
+        case .limited: trackingLabel = "limited"
         }
-        Task { @MainActor in
-            self.arkitTrackingState = trackingLabel
-        }
-        processFrameForRecording(frame, trackingLabel: trackingLabel)
-    }
 
-    private nonisolated func processFrameForRecording(_ frame: ARFrame, trackingLabel: String) {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        guard isRecording else { return }
-        guard frame.timestamp >= nextFrameAtSeconds else { return }
+        lock.lock()
+        guard isRecording, frame.timestamp >= nextFrameAtSeconds else {
+            lock.unlock()
+            onUpdate?(Update(trackingState: trackingLabel))
+            return
+        }
         nextFrameAtSeconds =
             max(nextFrameAtSeconds + Self.targetFrameIntervalSeconds, frame.timestamp - 0.005)
 
         let recordingTimeMilliseconds = (frame.timestamp - startUptimeSeconds) * 1000.0
         let eventTimestampMilliseconds = frame.timestamp * 1000.0
 
-        guard let (luma, width, height) = Self.portraitLuma(
+        guard let (luma, width, height) = RecordingCore.portraitLuma(
             from: frame.capturedImage,
             targetWidth: Self.trackerFrameWidth
         ) else {
+            lock.unlock()
             return
         }
         if trackerFrameHeight == 0 {
             trackerFrameHeight = height
-            cameraIntrinsics = frame.camera.intrinsics
-            cameraImageSize = frame.camera.imageResolution
+            cameraFocalPixels = Double(frame.camera.intrinsics.columns.0.x)
+            cameraImageWidth = Int(frame.camera.imageResolution.width)
+            cameraImageHeight = Int(frame.camera.imageResolution.height)
         }
-        guard height == trackerFrameHeight else { return }
+        guard height == trackerFrameHeight else {
+            lock.unlock()
+            return
+        }
 
         lumaFileHandle?.write(luma)
         let frameId = nextFrameId
         nextFrameId += 1
         recordedFrameCount += 1
+        let frames = recordedFrameCount
 
         frameEventLines.append(
             jsonLine([
@@ -206,8 +235,8 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
         )
 
         // Ground truth: ARKit camera pose. ARKit camera space matches the
-        // three.js convention (x right, y up, camera looks down -z); world is
-        // gravity-aligned with y up.
+        // three.js convention (x right, y up, camera looks down -z); the world
+        // is gravity-aligned with y up.
         let transform = frame.camera.transform
         let position = transform.columns.3
         let rotation = simd_quatf(transform)
@@ -223,16 +252,14 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
                 "trackingState": trackingLabel,
             ])
         )
+        lock.unlock()
 
-        let frames = recordedFrameCount
-        Task { @MainActor in
-            self.frameCount = frames
-        }
+        onUpdate?(Update(frameCount: frames, trackingState: trackingLabel))
     }
 
-    /// Extracts the Y (luma) plane, rotates landscape → portrait (90° CW), and
-    /// box-downsamples to `targetWidth` columns.
-    private nonisolated static func portraitLuma(
+    /// Extracts the Y (luma) plane, rotates landscape -> portrait (90° CW),
+    /// and box-downsamples to `targetWidth` columns.
+    private static func portraitLuma(
         from pixelBuffer: CVPixelBuffer,
         targetWidth: Int
     ) -> (Data, Int, Int)? {
@@ -246,7 +273,6 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
         let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
         let source = base.assumingMemoryBound(to: UInt8.self)
 
-        // Portrait dimensions: the landscape sensor image rotated 90° CW.
         let destWidth = targetWidth
         let destHeight = Int(
             (Double(targetWidth) * Double(sourceWidth) / Double(sourceHeight)).rounded()
@@ -255,20 +281,18 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
         out.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) in
             let dest = buffer.bindMemory(to: UInt8.self).baseAddress!
             for destY in 0..<destHeight {
-                // Portrait row destY samples along the sensor's x axis.
                 let sourceX = min(
                     sourceWidth - 1,
                     Int(Double(destY) / Double(destHeight) * Double(sourceWidth))
                 )
                 for destX in 0..<destWidth {
-                    // Portrait column destX samples the sensor's y axis,
-                    // reversed (90° clockwise rotation).
+                    // 90° clockwise: portrait column samples the sensor's y
+                    // axis, reversed.
                     let sourceY = min(
                         sourceHeight - 1,
                         sourceHeight - 1
                             - Int(Double(destX) / Double(destWidth) * Double(sourceHeight))
                     )
-                    // 2x2 box sample for mild antialiasing.
                     let x1 = min(sourceX + 1, sourceWidth - 1)
                     let y1 = min(sourceY + 1, sourceHeight - 1)
                     let sum =
@@ -283,66 +307,62 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
         return (out, destWidth, destHeight)
     }
 
-    // MARK: - CoreMotion → Safari-convention sensor events
+    // MARK: - CoreMotion -> Safari-convention sensor events
 
-    private nonisolated func appendMotion(_ motion: CMDeviceMotion) {
+    private func appendMotion(_ motion: CMDeviceMotion) {
         let gravityConstant = 9.80665
+        let degreesPerRadian = 180.0 / Double.pi
         let eventTimestampMilliseconds = motion.timestamp * 1000.0
 
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        guard isRecording else { return }
+        lock.lock()
+        guard isRecording else {
+            lock.unlock()
+            return
+        }
         let recordingTimeMilliseconds = (motion.timestamp - startUptimeSeconds) * 1000.0
 
         // Safari on iOS reports the NEGATED spec values (the long-standing
         // WebKit sign inversion the web pipeline already corrects for):
-        //   acceleration               = -9.81 * userAcceleration
-        //   accelerationIncludingGravity = 9.81 * (gravity - userAcceleration)
-        // (CMDeviceMotion gravity/userAcceleration are in g, device axes match
-        // the W3C device frame: x right, y top, z out of screen.)
-        let userAcceleration = motion.userAcceleration
+        //   acceleration                 = -9.81 * userAcceleration
+        //   accelerationIncludingGravity =  9.81 * (gravity - userAcceleration)
+        let user = motion.userAcceleration
         let gravity = motion.gravity
-        let acceleration: [String: Double] = [
-            "x": -gravityConstant * userAcceleration.x,
-            "y": -gravityConstant * userAcceleration.y,
-            "z": -gravityConstant * userAcceleration.z,
-        ]
-        let accelerationIncludingGravity: [String: Double] = [
-            "x": gravityConstant * (gravity.x - userAcceleration.x),
-            "y": gravityConstant * (gravity.y - userAcceleration.y),
-            "z": gravityConstant * (gravity.z - userAcceleration.z),
-        ]
-        // Safari's iOS rotationRate quirk: alpha/beta/gamma carry the device
-        // x/y/z rates (deg/s) — the web pipeline expects exactly that order.
-        let degreesPerRadian = 180.0 / Double.pi
-        let rotationRate: [String: Double] = [
-            "alpha": motion.rotationRate.x * degreesPerRadian,
-            "beta": motion.rotationRate.y * degreesPerRadian,
-            "gamma": motion.rotationRate.z * degreesPerRadian,
-        ]
         sensorEventLines.append(
             jsonLine([
                 "kind": "device_motion",
                 "eventTimestampMilliseconds": eventTimestampMilliseconds,
                 "receiptTimestampMilliseconds": eventTimestampMilliseconds,
                 "recordingTimeMilliseconds": recordingTimeMilliseconds,
-                "acceleration": acceleration,
-                "accelerationIncludingGravity": accelerationIncludingGravity,
-                "rotationRateDegreesPerSecond": rotationRate,
-                "intervalMilliseconds": motionManager.deviceMotionUpdateInterval * 1000.0,
-                "reportedInterval": motionManager.deviceMotionUpdateInterval,
+                "acceleration": [
+                    "x": -gravityConstant * user.x,
+                    "y": -gravityConstant * user.y,
+                    "z": -gravityConstant * user.z,
+                ],
+                "accelerationIncludingGravity": [
+                    "x": gravityConstant * (gravity.x - user.x),
+                    "y": gravityConstant * (gravity.y - user.y),
+                    "z": gravityConstant * (gravity.z - user.z),
+                ],
+                // Safari's iOS rotationRate quirk: alpha/beta/gamma carry the
+                // device x/y/z rates (deg/s).
+                "rotationRateDegreesPerSecond": [
+                    "alpha": motion.rotationRate.x * degreesPerRadian,
+                    "beta": motion.rotationRate.y * degreesPerRadian,
+                    "gamma": motion.rotationRate.z * degreesPerRadian,
+                ],
+                "intervalMilliseconds": 1000.0 / 60.0,
+                "reportedInterval": 1.0 / 60.0,
                 "screenAngleDegrees": 0,
                 "screenOrientation": "portrait-primary",
             ])
         )
 
-        // W3C deviceorientation: decompose the attitude (device → earth,
-        // reference frame Z vertical, X arbitrary — matching Safari's
-        // gyro-relative alpha) as R = Rz(alpha)·Rx(beta)·Ry(gamma):
-        //   beta  = asin(m32), alpha = atan2(-m12, m22), gamma = atan2(-m31, m33)
-        // Sanity anchor: a phone held upright in portrait must give beta ≈ 90.
-        // If it reads ≈ 0 instead, CMRotationMatrix is the transpose of what
-        // this assumes — swap to the transposed elements.
+        // W3C deviceorientation from the attitude rotation matrix (device ->
+        // earth, Z vertical, X arbitrary), decomposed as Rz(a)·Rx(b)·Ry(g):
+        //   b = asin(m32), a = atan2(-m12, m22), g = atan2(-m31, m33)
+        // Sanity anchor: a phone held upright in portrait must give beta ~ 90.
+        // If it reads ~0, CMRotationMatrix is the transpose of this
+        // assumption — swap the off-diagonal indices.
         let m = motion.attitude.rotationMatrix
         let beta = asin(max(-1.0, min(1.0, m.m32))) * degreesPerRadian
         var alpha = atan2(-m.m12, m.m22) * degreesPerRadian
@@ -362,18 +382,21 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
             ])
         )
         let count = sensorEventLines.count
-        Task { @MainActor in
-            self.sensorEventCount = count
-        }
+        lock.unlock()
+        onUpdate?(Update(sensorEventCount: count))
     }
 
     // MARK: - Manifest + upload
 
-    private func buildManifest(durationMilliseconds: Double) -> String {
-        let intrinsics = cameraIntrinsics
+    /// Caller must hold `lock`.
+    private func buildManifestLocked(durationMilliseconds: Double) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var manifest: [String: Any] = [
+        let longAxisPixels = Double(max(cameraImageWidth, cameraImageHeight))
+        let longAxisFov = cameraFocalPixels > 0
+            ? 2.0 * atan(longAxisPixels / (2.0 * cameraFocalPixels)) * 180.0 / Double.pi
+            : 68.0
+        let manifest: [String: Any] = [
             "kind": "pizzanet_ar_tracking_recording",
             "schemaVersion": 2,
             "source": "native-arkit",
@@ -388,9 +411,14 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
                 "trackerFrameHeight": trackerFrameHeight,
                 "trackerLumaFormat": "GRAY8_contiguous",
                 "targetCaptureRateHz": 30,
-                "videoWidth": Int(cameraImageSize.height),
-                "videoHeight": Int(cameraImageSize.width),
-                "longAxisFieldOfViewDegrees": arkitLongAxisFieldOfViewDegrees() ?? 68,
+                "videoWidth": cameraImageHeight,
+                "videoHeight": cameraImageWidth,
+                "longAxisFieldOfViewDegrees": longAxisFov,
+            ],
+            "arkitIntrinsics": [
+                "focalPixels": cameraFocalPixels,
+                "imageWidth": cameraImageWidth,
+                "imageHeight": cameraImageHeight,
             ],
             "clock": [
                 "eventTimestampBasis": "boottimeMilliseconds",
@@ -411,68 +439,41 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
                 "arkitPoses": "arkit-poses.ndjson",
             ],
         ]
-        if let intrinsics {
-            manifest["arkitIntrinsics"] = [
-                "fx": intrinsics.columns.0.x,
-                "fy": intrinsics.columns.1.y,
-                "cx": intrinsics.columns.2.x,
-                "cy": intrinsics.columns.2.y,
-                "imageWidth": Int(cameraImageSize.width),
-                "imageHeight": Int(cameraImageSize.height),
-            ]
-        }
         let data = try? JSONSerialization.data(withJSONObject: manifest)
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
-    /// The true long-axis FOV from ARKit's calibrated intrinsics — this also
-    /// calibrates the web tracker's FOV assumption for this exact device.
-    private func arkitLongAxisFieldOfViewDegrees() -> Double? {
-        guard let intrinsics = cameraIntrinsics, cameraImageSize.width > 0 else {
-            return nil
-        }
-        let longAxisPixels = Double(max(cameraImageSize.width, cameraImageSize.height))
-        let focal = Double(intrinsics.columns.0.x)
-        return 2.0 * atan(longAxisPixels / (2.0 * focal)) * 180.0 / Double.pi
-    }
-
-    private nonisolated static func upload(
+    private static func upload(
         manifest: String,
         sensorEvents: String,
         frameEvents: String,
         arkitPoses: String,
         lumaFileURL: URL
-    ) async throws -> String {
+    ) async throws {
         let boundary = "pizzanet-\(UUID().uuidString)"
         var body = Data()
-        func addField(_ name: String, _ value: String, filename: String? = nil) {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            if let filename {
-                body.append(
-                    "Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n\r\n"
-                        .data(using: .utf8)!
-                )
-            } else {
-                body.append(
-                    "Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n"
-                        .data(using: .utf8)!
-                )
-            }
-            body.append(value.data(using: .utf8)!)
-            body.append("\r\n".data(using: .utf8)!)
+        func addField(_ name: String, _ value: String) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(
+                Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8)
+            )
+            body.append(Data(value.utf8))
+            body.append(Data("\r\n".utf8))
         }
         addField("manifest", manifest)
         addField("sensorEvents", sensorEvents)
         addField("frameEvents", frameEvents)
         addField("arkitPoses", arkitPoses)
         let luma = try Data(contentsOf: lumaFileURL)
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append(Data("--\(boundary)\r\n".utf8))
         body.append(
-            "Content-Disposition: form-data; name=\"trackerLuma\"; filename=\"tracker-luma.gray\"\r\nContent-Type: application/octet-stream\r\n\r\n"
-                .data(using: .utf8)!
+            Data(
+                "Content-Disposition: form-data; name=\"trackerLuma\"; filename=\"tracker-luma.gray\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+                    .utf8
+            )
         )
         body.append(luma)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
 
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "POST"
@@ -495,12 +496,11 @@ final class RecordingSession: NSObject, ObservableObject, ARSessionDelegate {
             )
         }
         try? FileManager.default.removeItem(at: lumaFileURL)
-        return String(data: responseData, encoding: .utf8) ?? "uploaded"
     }
-}
 
-/// Serializes a dictionary to a single NDJSON line with stable key order.
-private func jsonLine(_ object: [String: Any]) -> String {
-    let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-    return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    /// Serializes a dictionary to a single NDJSON line with stable key order.
+    private func jsonLine(_ object: [String: Any]) -> String {
+        let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
 }
