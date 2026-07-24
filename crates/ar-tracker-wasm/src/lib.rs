@@ -1156,11 +1156,21 @@ impl ArTracker {
             }
             return;
         }
-        // Maintenance: correct residual scale drift steadily; bounded steps so
-        // the world never visibly jumps.
-        if (estimate.ratio - 1.0).abs() > 0.02 {
-            let step = estimate.ratio.clamp(0.93, 1.08);
-            self.apply_map_scale(step);
+        // Maintenance: individual estimates are noisy (±2x observed), so
+        // filter through a median window and move only a quarter of the way
+        // per keyframe — the gauge glides toward metric instead of hunting.
+        self.recent_scale_ratios.push(estimate.ratio);
+        if self.recent_scale_ratios.len() > 7 {
+            self.recent_scale_ratios.remove(0);
+        }
+        if self.recent_scale_ratios.len() >= 4 {
+            let mut sorted = self.recent_scale_ratios.clone();
+            sorted.sort_by(f64::total_cmp);
+            let median = sorted[sorted.len() / 2];
+            if median.ln().abs() > 0.05 {
+                let step = (median.ln() * 0.25).exp().clamp(0.9, 1.12);
+                self.apply_map_scale(step);
+            }
         }
     }
 
