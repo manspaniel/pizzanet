@@ -22,7 +22,7 @@ use vio_core::DVec3;
 /// Minimum contiguous keyframe pairs before an estimate is attempted.
 const MIN_PAIRS: usize = 5;
 /// Minimum summed |Δv| across the chain (m/s) for the scale to be observable.
-const MIN_EXCITATION_MPS: f64 = 0.5;
+const MIN_EXCITATION_MPS: f64 = 1.2;
 /// Minimum chain duration in seconds.
 const MIN_SPAN_SECONDS: f64 = 1.5;
 /// Estimates outside this ratio band are treated as failed solves.
@@ -137,7 +137,7 @@ pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
     // Require genuine correlation before trusting the slope: uncorrelated
     // noise must not set the gauge.
     let correlation = uw / (uu.sqrt() * ww.sqrt());
-    if correlation < 0.4 {
+    if correlation < 0.6 {
         return None;
     }
     let ratio = (ww / uu).sqrt();

@@ -146,9 +146,6 @@ pub struct ArTracker {
     relocalization_enabled: bool,
     latest_window_end_cost: f64,
     scale_initialized: bool,
-    scale_locked: bool,
-    scale_settled_observations: u32,
-    scale_excitation_accumulated: f64,
     latest_scale_ratio: f64,
     scale_confidence: f64,
     recent_scale_ratios: Vec<f64>,
@@ -209,9 +206,6 @@ impl ArTracker {
             relocalization_enabled: true,
             latest_window_end_cost: 0.0,
             scale_initialized: false,
-            scale_locked: false,
-            scale_settled_observations: 0,
-            scale_excitation_accumulated: 0.0,
             latest_scale_ratio: 1.0,
             scale_confidence: 0.0,
             recent_scale_ratios: Vec::new(),
@@ -444,9 +438,6 @@ impl ArTracker {
         self.clear_pending_appearance();
         self.latest_window_end_cost = 0.0;
         self.scale_initialized = false;
-        self.scale_locked = false;
-        self.scale_settled_observations = 0;
-        self.scale_excitation_accumulated = 0.0;
         self.latest_scale_ratio = 1.0;
         self.scale_confidence = 0.0;
         self.recent_scale_ratios.clear();
@@ -1149,67 +1140,29 @@ impl ArTracker {
         self.latest_scale_ratio = estimate.ratio;
         let confidence = (estimate.excitation / 2.0).clamp(0.0, 1.0);
         self.scale_confidence = self.scale_confidence * 0.9 + confidence * 0.1;
-        if !self.scale_initialized {
-            // Initialize from the median of a small window of consistent
-            // estimates — the very first estimate over a short chain is the
-            // noisiest one and must not set the gauge alone.
-            if confidence >= 0.4 {
-                self.recent_scale_ratios.push(estimate.ratio);
-                if self.recent_scale_ratios.len() > 5 {
-                    self.recent_scale_ratios.remove(0);
-                }
-                if self.recent_scale_ratios.len() >= 3 {
-                    let mut sorted = self.recent_scale_ratios.clone();
-                    sorted.sort_by(f64::total_cmp);
-                    let median = sorted[sorted.len() / 2];
-                    let consistent = sorted
-                        .iter()
-                        .all(|ratio| (ratio / median).ln().abs() < 0.35);
-                    if consistent {
-                        self.apply_map_scale(median.clamp(0.1, 6.0));
-                        self.scale_initialized = true;
-                        self.recent_scale_ratios.clear();
-                    }
-                }
+        // One-time bootstrap only. The gauge lives inside the bundle
+        // adjustment (preintegration factors anchor it continuously once
+        // depth priors release on convergence); post-hoc rescaling events were
+        // user-visible as the world flipping size, and a "lock" could not
+        // actually pin a gauge that BA keeps evolving. The closed-form
+        // estimate's only job is to put the bootstrap map near metric before
+        // the session gets going.
+        if !self.scale_initialized && confidence >= 0.4 {
+            self.recent_scale_ratios.push(estimate.ratio);
+            if self.recent_scale_ratios.len() > 5 {
+                self.recent_scale_ratios.remove(0);
             }
-            return;
-        }
-        // Once the gauge has settled near metric, LOCK it: continuous
-        // maintenance rescaling is visible to the user as the world breathing,
-        // and ground-truth replays show the maintenance estimates wander ±2x —
-        // a stable slightly-imperfect scale beats a hunting one. The lock
-        // releases only on recenter.
-        if self.scale_locked {
-            return;
-        }
-        // Maintenance: individual estimates are noisy (±2x observed), so
-        // filter through a median window and move only a quarter of the way
-        // per keyframe — the gauge glides toward metric instead of hunting.
-        self.recent_scale_ratios.push(estimate.ratio);
-        if self.recent_scale_ratios.len() > 7 {
-            self.recent_scale_ratios.remove(0);
-        }
-        if self.recent_scale_ratios.len() >= 4 {
-            let mut sorted = self.recent_scale_ratios.clone();
-            sorted.sort_by(f64::total_cmp);
-            let median = sorted[sorted.len() / 2];
-            if median.ln().abs() > 0.05 {
-                self.scale_settled_observations = 0;
-                let step = (median.ln() * 0.25).exp().clamp(0.9, 1.12);
-                self.apply_map_scale(step);
-            } else {
-                // Near-unity observation: count toward settling. Locking also
-                // requires substantial accumulated excitation — consecutive
-                // agreement alone only proves the estimator agrees with
-                // itself, and under calm motion it can be consistently wrong
-                // (a session was observed locking 10x off with low
-                // excitation).
-                self.scale_settled_observations = self.scale_settled_observations.saturating_add(1);
-                self.scale_excitation_accumulated += estimate.excitation;
-                if self.scale_settled_observations >= 6
-                    && self.scale_excitation_accumulated >= 10.0
-                {
-                    self.scale_locked = true;
+            if self.recent_scale_ratios.len() >= 3 {
+                let mut sorted = self.recent_scale_ratios.clone();
+                sorted.sort_by(f64::total_cmp);
+                let median = sorted[sorted.len() / 2];
+                let consistent = sorted
+                    .iter()
+                    .all(|ratio| (ratio / median).ln().abs() < 0.35);
+                if consistent {
+                    self.apply_map_scale(median.clamp(0.1, 6.0));
+                    self.scale_initialized = true;
+                    self.recent_scale_ratios.clear();
                 }
             }
         }

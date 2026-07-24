@@ -39,8 +39,8 @@ const FRAME_OUTLIER_MAX_PIXELS: f64 = 8.0;
 const WINDOW_OUTLIER_PIXELS: f64 = 5.0;
 /// Preintegration weights. Phone accelerometers are noisy and the intervals
 /// short, so these act as a scale-observing hint, not a hard constraint.
-const PREINT_VELOCITY_ISIGMA: f32 = 1.0 / 0.35;
-const PREINT_POSITION_ISIGMA: f32 = 1.0 / 0.18;
+const PREINT_VELOCITY_ISIGMA: f32 = 1.0 / 0.25;
+const PREINT_POSITION_ISIGMA: f32 = 1.0 / 0.12;
 /// Weak inverse-depth prior keeping unobserved depths near initialization
 /// until parallax takes over. Once a landmark's parallax has converged its
 /// depth, the prior all but releases — otherwise the depth priors collectively
@@ -48,6 +48,9 @@ const PREINT_POSITION_ISIGMA: f32 = 1.0 / 0.18;
 /// stays glued to the initialization depth instead of the accelerometer's
 /// metric scale.
 const INVERSE_DEPTH_PRIOR_ISIGMA: f32 = 1.0 / 0.35;
+/// Once parallax has converged a depth, its prior all but releases so the
+/// preintegration factors — not the depth priors — hold the scale gauge.
+const CONVERGED_DEPTH_PRIOR_ISIGMA: f32 = 1.0 / 2.5;
 /// Gauge prior pinning the oldest window keyframe (approximate
 /// marginalization: information from factors that slid out of the window is
 /// summarized as trust in that keyframe's current estimate).
@@ -543,7 +546,11 @@ pub fn solve_window(map: &mut Map, intrinsics: &Intrinsics) -> Option<WindowSolv
         problem.landmarks.push(LmNode {
             rho: Param::new(landmark.inverse_depth as f32),
             prior_rho: landmark.inverse_depth as f32,
-            prior_isigma: INVERSE_DEPTH_PRIOR_ISIGMA,
+            prior_isigma: if landmark.converged() {
+                CONVERGED_DEPTH_PRIOR_ISIGMA
+            } else {
+                INVERSE_DEPTH_PRIOR_ISIGMA
+            },
             hb: SelfBlock::new(),
         });
         landmark_index.push((*landmark_id, index));
