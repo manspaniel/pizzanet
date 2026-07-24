@@ -37,10 +37,14 @@ const REPROJECTION_ISIGMA: f32 = 1.0 / 1.5;
 const FRAME_OUTLIER_MIN_PIXELS: f64 = 2.0;
 const FRAME_OUTLIER_MAX_PIXELS: f64 = 8.0;
 const WINDOW_OUTLIER_PIXELS: f64 = 5.0;
-/// Preintegration weights. Phone accelerometers are noisy and the intervals
-/// short, so these act as a scale-observing hint, not a hard constraint.
-const PREINT_VELOCITY_ISIGMA: f32 = 1.0 / 0.25;
-const PREINT_POSITION_ISIGMA: f32 = 1.0 / 0.12;
+/// Preintegration weights. These are the only metric constraint in the
+/// window, so they must be strong enough to hold the scale gauge against the
+/// scale-free reprojection factors and the keyframe/depth priors — weaker
+/// values let the map re-inflate over a session. Tuned against the ARKit
+/// ground-truth recordings (4x weaker degrades scale, 2x stronger degrades
+/// shape from accelerometer noise).
+const PREINT_VELOCITY_ISIGMA: f32 = 1.0 / 0.0625;
+const PREINT_POSITION_ISIGMA: f32 = 1.0 / 0.03;
 /// Weak inverse-depth prior keeping unobserved depths near initialization
 /// until parallax takes over. Once a landmark's parallax has converged its
 /// depth, the prior all but releases — otherwise the depth priors collectively

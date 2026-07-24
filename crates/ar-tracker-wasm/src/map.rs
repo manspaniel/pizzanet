@@ -40,12 +40,26 @@ pub struct Preintegration {
 
 impl Preintegration {
     pub fn push(&mut self, acceleration_world: DVec3, seconds: f64) {
+        self.push_hold(acceleration_world, seconds);
+        self.sample_count += 1;
+    }
+
+    /// Integrates a held (extrapolated) acceleration over a sub-interval
+    /// without counting a measured sample. Used for the trailing segment of a
+    /// frame interval, so `duration_seconds` matches the real keyframe
+    /// interval — the estimator and scale solver divide by it.
+    pub fn push_hold(&mut self, acceleration_world: DVec3, seconds: f64) {
         let seconds = seconds.clamp(0.0, 0.05);
         self.delta_position +=
             self.delta_velocity * seconds + acceleration_world * (0.5 * seconds * seconds);
         self.delta_velocity += acceleration_world * seconds;
         self.duration_seconds += seconds;
-        self.sample_count += 1;
+    }
+
+    /// Advances the time base over a sub-interval with no usable acceleration
+    /// estimate at all (coast at the current delta velocity).
+    pub fn push_gap(&mut self, seconds: f64) {
+        self.push_hold(DVec3::ZERO, seconds);
     }
 }
 

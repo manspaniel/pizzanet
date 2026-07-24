@@ -750,6 +750,9 @@ impl ArTracker {
         if samples.is_empty() {
             self.inertial_stationary_candidate = false;
             self.consecutive_stationary_frames = 0;
+            // No measurement this interval; keep the preintegration time base
+            // aligned with the real keyframe interval by coasting through it.
+            self.preintegration.push_gap(self.latest_frame_delta_seconds);
             self.inertial_velocity_world_mps *=
                 (-INERTIAL_VELOCITY_DAMPING_PER_SECOND * self.latest_frame_delta_seconds).exp();
             self.camera_position +=
@@ -765,6 +768,7 @@ impl ArTracker {
         let mut velocity = self.inertial_velocity_world_mps;
         let mut cursor = previous_timestamp;
         let mut latest_acceleration_world = DVec3::ZERO;
+        let mut latest_acceleration_world_raw: Option<DVec3> = None;
         for sample in samples {
             let Some(linear_acceleration_device) = sample.linear_acceleration_mps2() else {
                 continue;
@@ -794,6 +798,11 @@ impl ArTracker {
                 position += velocity * seconds + acceleration_world * (0.5 * seconds * seconds);
                 velocity += acceleration_world * seconds;
                 latest_acceleration_world = acceleration_world;
+                latest_acceleration_world_raw = Some(acceleration_world_raw);
+            } else {
+                // A rejected spike still consumes real time; coast so the
+                // preintegration time base stays aligned with the interval.
+                self.preintegration.push_gap(seconds);
             }
             corrected_acceleration_sum += acceleration_world_raw.length();
             gyro_sum += sample.angular_velocity_rad_s().length();
@@ -805,6 +814,16 @@ impl ArTracker {
             .checked_duration_since(cursor)
             .map_or(0.0, MonotonicDuration::as_secs_f64)
             .min(0.05);
+        // The trailing sub-interval (last sample to the frame timestamp) is
+        // real integration time — at 30 fps with ~50 Hz sensors it averages
+        // ~30% of every frame interval, and dropping it systematically
+        // truncated dt, delta-v, and delta-p in the keyframe preintegration
+        // that anchors metric scale. Hold the last world acceleration across
+        // it, mirroring the pose propagation below.
+        match latest_acceleration_world_raw {
+            Some(acceleration) => self.preintegration.push_hold(acceleration, remaining_seconds),
+            None => self.preintegration.push_gap(remaining_seconds),
+        }
         position += velocity * remaining_seconds
             + latest_acceleration_world * (0.5 * remaining_seconds * remaining_seconds);
         velocity += latest_acceleration_world * remaining_seconds;
