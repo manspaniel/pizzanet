@@ -21,7 +21,7 @@ const LK_MAX_PHOTOMETRIC_ERROR: f32 = 40.0;
 /// Detection grid cell edge in pixels; one strongest corner per cell keeps
 /// coverage uniform, which the translation solve depends on.
 const DETECT_CELL_PIXELS: u32 = 20;
-const DETECT_QUALITY_LEVEL: f32 = 0.02;
+const DETECT_QUALITY_LEVEL: f32 = 0.05;
 const DETECT_MIN_DISTANCE_PIXELS: u32 = 8;
 /// Keep detections and tracks clear of the border so LK windows fit.
 const BORDER_PIXELS: f32 = 8.0;
@@ -52,6 +52,9 @@ pub struct FeatureTrack {
     /// Landmark this track observes, once anchored by the map.
     pub landmark: Option<u32>,
     pub state: TrackState,
+    /// Smoothed LK photometric residual (0..255) — the flow's own certainty
+    /// signal; low means the patch is being followed crisply.
+    pub smoothed_error: f32,
 }
 
 pub struct FrontEndStats {
@@ -149,6 +152,7 @@ impl FrontEnd {
                     track.previous_pixel = track.pixel;
                     track.pixel = result.pos;
                     track.age = track.age.saturating_add(1);
+                    track.smoothed_error = track.smoothed_error * 0.7 + result.error * 0.3;
                     track.state = if track.landmark.is_some() {
                         TrackState::Anchored
                     } else {
@@ -204,6 +208,7 @@ impl FrontEnd {
                 age: 0,
                 landmark: None,
                 state: TrackState::New,
+                smoothed_error: 10.0,
             });
             self.next_track_id += 1;
             stats.detected += 1;
@@ -286,6 +291,7 @@ impl FrontEnd {
                 age: 1,
                 landmark: Some(*landmark),
                 state: TrackState::Anchored,
+                smoothed_error: 15.0,
             });
             self.next_track_id += 1;
             recovered += 1;

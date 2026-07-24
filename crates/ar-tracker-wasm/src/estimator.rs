@@ -151,6 +151,10 @@ pub struct FrameObservation {
     /// Centered pixel coordinates (pixel minus principal point).
     pub pixel_x: f64,
     pub pixel_y: f64,
+    /// 0..1 observation confidence: landmark depth convergence combined with
+    /// the track's flow certainty. Scales the residual weight so uncertain
+    /// observations inform without dominating.
+    pub weight: f64,
 }
 
 pub struct FramePoseSolution {
@@ -194,7 +198,7 @@ pub fn solve_frame_pose(
                 focal: intrinsics.focal as f32,
                 pixel_x: observation.pixel_x as f32,
                 pixel_y: observation.pixel_y as f32,
-                isigma: REPROJECTION_ISIGMA,
+                isigma: REPROJECTION_ISIGMA * observation.weight as f32,
                 frines: std::vec::Vec::from([CamObs { cam }]),
             });
         }
@@ -570,6 +574,11 @@ pub fn solve_window(map: &mut Map, intrinsics: &Intrinsics) -> Option<WindowSolv
             let Some(anchor) = map.keyframe(landmark.anchor) else {
                 continue;
             };
+            let observation_isigma = if landmark.converged() {
+                REPROJECTION_ISIGMA
+            } else {
+                REPROJECTION_ISIGMA * 0.4
+            };
             let dir_anchor = vec3_to_f32(anchor.orientation * landmark.bearing);
             let pixel_x = (f64::from(observation.pixel.0) - intrinsics.center_x) as f32;
             let pixel_y = (f64::from(observation.pixel.1) - intrinsics.center_y) as f32;
@@ -602,7 +611,7 @@ pub fn solve_window(map: &mut Map, intrinsics: &Intrinsics) -> Option<WindowSolv
                     focal: intrinsics.focal as f32,
                     pixel_x,
                     pixel_y,
-                    isigma: REPROJECTION_ISIGMA,
+                    isigma: observation_isigma,
                     hb: TripletBlock::new(),
                 });
             } else {
@@ -617,7 +626,7 @@ pub fn solve_window(map: &mut Map, intrinsics: &Intrinsics) -> Option<WindowSolv
                     focal: intrinsics.focal as f32,
                     pixel_x,
                     pixel_y,
-                    isigma: REPROJECTION_ISIGMA,
+                    isigma: observation_isigma,
                     hb: CrossBlock::new(),
                 });
             }

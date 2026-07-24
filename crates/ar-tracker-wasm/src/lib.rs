@@ -999,11 +999,20 @@ impl ArTracker {
             let Some(world) = self.map.landmark_world(landmark) else {
                 continue;
             };
+            // Confidence: depth-converged landmarks vote at full strength;
+            // fresh prior-depth landmarks are systematically biased under
+            // translation and vote reduced. The flow's own certainty (smoothed
+            // photometric error) scales further — crisp tracks near 1.0,
+            // marginal ones toward 0.5.
+            let depth_weight = if landmark.converged() { 1.0 } else { 0.4 };
+            let flow_weight =
+                (25.0 / (10.0 + f64::from(track.smoothed_error))).clamp(0.5, 1.25);
             observations.push(FrameObservation {
                 landmark: landmark_id,
                 world,
                 pixel_x: f64::from(track.pixel.0) - intrinsics.center_x,
                 pixel_y: f64::from(track.pixel.1) - intrinsics.center_y,
+                weight: depth_weight * flow_weight,
             });
         }
 
