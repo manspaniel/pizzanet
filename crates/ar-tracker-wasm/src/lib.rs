@@ -146,6 +146,8 @@ pub struct ArTracker {
     relocalization_enabled: bool,
     latest_window_end_cost: f64,
     scale_initialized: bool,
+    scale_locked: bool,
+    scale_settled_observations: u32,
     latest_scale_ratio: f64,
     scale_confidence: f64,
     recent_scale_ratios: Vec<f64>,
@@ -206,6 +208,8 @@ impl ArTracker {
             relocalization_enabled: true,
             latest_window_end_cost: 0.0,
             scale_initialized: false,
+            scale_locked: false,
+            scale_settled_observations: 0,
             latest_scale_ratio: 1.0,
             scale_confidence: 0.0,
             recent_scale_ratios: Vec::new(),
@@ -438,6 +442,8 @@ impl ArTracker {
         self.clear_pending_appearance();
         self.latest_window_end_cost = 0.0;
         self.scale_initialized = false;
+        self.scale_locked = false;
+        self.scale_settled_observations = 0;
         self.latest_scale_ratio = 1.0;
         self.scale_confidence = 0.0;
         self.recent_scale_ratios.clear();
@@ -1156,6 +1162,14 @@ impl ArTracker {
             }
             return;
         }
+        // Once the gauge has settled near metric, LOCK it: continuous
+        // maintenance rescaling is visible to the user as the world breathing,
+        // and ground-truth replays show the maintenance estimates wander ±2x —
+        // a stable slightly-imperfect scale beats a hunting one. The lock
+        // releases only on recenter.
+        if self.scale_locked {
+            return;
+        }
         // Maintenance: individual estimates are noisy (±2x observed), so
         // filter through a median window and move only a quarter of the way
         // per keyframe — the gauge glides toward metric instead of hunting.
@@ -1168,8 +1182,16 @@ impl ArTracker {
             sorted.sort_by(f64::total_cmp);
             let median = sorted[sorted.len() / 2];
             if median.ln().abs() > 0.05 {
+                self.scale_settled_observations = 0;
                 let step = (median.ln() * 0.25).exp().clamp(0.9, 1.12);
                 self.apply_map_scale(step);
+            } else {
+                // Near-unity observation: count toward settling; lock after
+                // several in a row.
+                self.scale_settled_observations = self.scale_settled_observations.saturating_add(1);
+                if self.scale_settled_observations >= 6 {
+                    self.scale_locked = true;
+                }
             }
         }
     }

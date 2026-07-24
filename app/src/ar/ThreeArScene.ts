@@ -49,6 +49,7 @@ export class ThreeArScene {
     directional.shadow.mapSize.set(1024, 1024);
     this.scene.add(directional);
 
+    // The cube is 1.0 m per side, centered 2.5 m in front of the session start.
     const cube = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshStandardMaterial({
@@ -77,6 +78,52 @@ export class ThreeArScene {
     this.anchor.add(shadow);
     this.anchor.position.set(0, 0, -2.5);
     this.scene.add(this.anchor);
+
+    // Floor grid at y=0: 4 m extent with 0.5 m divisions, so metric scale is
+    // visually judgeable against the floor. Subtle and transparent so it works
+    // over any camera background (including the transparent native-camera mode).
+    const grid = new THREE.GridHelper(4, 8, 0x9a86c4, 0x9a86c4);
+    const gridMaterial = grid.material as THREE.LineBasicMaterial;
+    gridMaterial.transparent = true;
+    gridMaterial.opacity = 0.35;
+    gridMaterial.depthWrite = false;
+    this.scene.add(grid);
+
+    // World-origin marker: RGB axis triad (X red, Y green, Z blue, 0.15 m each)
+    // at (0, 1.6, 0) — the tracker's session-start camera position, which
+    // physically coincides with ARKit's origin gizmo in the companion native
+    // app. Rendered on top (depthTest off, high renderOrder) so it stays
+    // visible; on-screen separation between this triad and ARKit's gizmo IS
+    // the drift between the two tracking origins.
+    const originTriad = new THREE.Group();
+    const axisLengthMeters = 0.15;
+    const axisRadiusMeters = 0.004;
+    const axes: Array<{ color: number; rotate: (mesh: THREE.Mesh) => void }> = [
+      { color: 0xff3b30, rotate: (mesh) => mesh.rotateZ(-Math.PI / 2) }, // +X red
+      { color: 0x34c759, rotate: () => {} }, // +Y green
+      { color: 0x0a84ff, rotate: (mesh) => mesh.rotateX(Math.PI / 2) }, // +Z blue
+    ];
+    for (const axis of axes) {
+      const geometry = new THREE.CylinderGeometry(
+        axisRadiusMeters,
+        axisRadiusMeters,
+        axisLengthMeters,
+        8,
+      );
+      // Shift so the cylinder extends from the origin along +Y before rotation.
+      geometry.translate(0, axisLengthMeters / 2, 0);
+      const material = new THREE.MeshBasicMaterial({
+        color: axis.color,
+        depthTest: false,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.renderOrder = 1000;
+      axis.rotate(mesh);
+      originTriad.add(mesh);
+    }
+    originTriad.position.set(0, 1.6, 0);
+    this.scene.add(originTriad);
 
     this.reticle = new THREE.Mesh(
       new THREE.RingGeometry(0.11, 0.15, 40).rotateX(-Math.PI / 2),
