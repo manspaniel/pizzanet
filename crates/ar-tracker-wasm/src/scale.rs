@@ -26,7 +26,7 @@ const MIN_EXCITATION_MPS: f64 = 0.5;
 /// Minimum chain duration in seconds.
 const MIN_SPAN_SECONDS: f64 = 1.5;
 /// Estimates outside this ratio band are treated as failed solves.
-const MIN_RATIO: f64 = 0.15;
+const MIN_RATIO: f64 = 0.1;
 const MAX_RATIO: f64 = 6.0;
 
 /// One scale observation: the multiplicative correction that would make the
@@ -93,41 +93,54 @@ pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
         return None;
     }
 
-    // Least squares over x = [s, v0x, v0y, v0z]. For pair i, with the chained
-    // velocity prefix P_i = Σ_{j<i} Δv_j:
-    //   s·d_i − v0·dt_i = Δp_i + P_i·dt_i    (three rows)
-    let mut normal = [[0.0_f64; 4]; 4];
-    let mut rhs = [0.0_f64; 4];
+    // Per-pair unit-time variables: u_i = visual mean velocity, w_i = the
+    // inertially measured mean velocity (Δp_i/dt_i plus the chained Δv
+    // prefix). The kinematics give s·u_i − v0 = w_i; subtracting the
+    // dt-weighted means eliminates v0 exactly, leaving pure proportionality
+    // in the centered variables. The slope is then estimated symmetrically
+    // (geometric mean of the forward and reverse regressions — total least
+    // squares for a scalar slope): a one-sided regression on the noisy visual
+    // displacements is biased toward zero (regression dilution), which showed
+    // up against ARKit ground truth as ~2.5× underestimated ratios.
     let mut velocity_prefix = DVec3::ZERO;
+    let mut unit: Vec<(f64, DVec3, DVec3)> = Vec::with_capacity(pairs.len());
+    let mut weight_sum = 0.0;
+    let mut mean_u = DVec3::ZERO;
+    let mut mean_w = DVec3::ZERO;
     for (displacement, dt, delta_velocity, delta_position) in &pairs {
-        let target = *delta_position + velocity_prefix * *dt;
-        for axis in 0..3 {
-            // Row: [d_i[axis], −dt·e_axis] · x = target[axis]
-            let mut row = [0.0_f64; 4];
-            row[0] = displacement[axis];
-            row[1 + axis] = -*dt;
-            for column in 0..4 {
-                for inner in 0..4 {
-                    normal[column][inner] += row[column] * row[inner];
-                }
-                rhs[column] += row[column] * target[axis];
-            }
-        }
+        let u = *displacement / *dt;
+        let w = *delta_position / *dt + velocity_prefix;
+        unit.push((*dt, u, w));
+        weight_sum += dt;
+        mean_u += u * *dt;
+        mean_w += w * *dt;
         velocity_prefix += *delta_velocity;
     }
-    let solution = solve_4x4(normal, rhs);
-    #[cfg(not(target_arch = "wasm32"))]
-    if std::env::var_os("AR_DEBUG_SCALE").is_some() {
-        match &solution {
-            Some(x) => eprintln!(
-                "scale-solve ratio={:.4} v0=({:.2},{:.2},{:.2})",
-                x[0], x[1], x[2], x[3]
-            ),
-            None => eprintln!("scale-solve singular"),
-        }
+    if weight_sum <= 1.0e-9 {
+        return None;
     }
-    let solution = solution?;
-    let ratio = solution[0];
+    mean_u /= weight_sum;
+    mean_w /= weight_sum;
+    let mut uu = 0.0;
+    let mut ww = 0.0;
+    let mut uw = 0.0;
+    for (dt, u, w) in &unit {
+        let cu = *u - mean_u;
+        let cw = *w - mean_w;
+        uu += dt * cu.length_squared();
+        ww += dt * cw.length_squared();
+        uw += dt * cu.dot(cw);
+    }
+    if uu <= 1.0e-9 || ww <= 1.0e-9 {
+        return None;
+    }
+    // Require genuine correlation before trusting the slope: uncorrelated
+    // noise must not set the gauge.
+    let correlation = uw / (uu.sqrt() * ww.sqrt());
+    if correlation < 0.4 {
+        return None;
+    }
+    let ratio = (ww / uu).sqrt();
     if !ratio.is_finite() || !(MIN_RATIO..=MAX_RATIO).contains(&ratio) {
         return None;
     }
@@ -136,40 +149,6 @@ pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
         excitation,
         pairs: pairs.len(),
     })
-}
-
-/// Plain Gaussian elimination with partial pivoting for the 4×4 normal system.
-fn solve_4x4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
-    for pivot in 0..4 {
-        let mut best = pivot;
-        for row in pivot + 1..4 {
-            if a[row][pivot].abs() > a[best][pivot].abs() {
-                best = row;
-            }
-        }
-        if a[best][pivot].abs() < 1.0e-9 {
-            return None;
-        }
-        a.swap(pivot, best);
-        b.swap(pivot, best);
-        for row in pivot + 1..4 {
-            let factor = a[row][pivot] / a[pivot][pivot];
-            let (upper, lower) = a.split_at_mut(row);
-            for (column, value) in lower[0].iter_mut().enumerate().skip(pivot) {
-                *value -= factor * upper[pivot][column];
-            }
-            b[row] -= factor * b[pivot];
-        }
-    }
-    let mut x = [0.0_f64; 4];
-    for row in (0..4).rev() {
-        let mut sum = b[row];
-        for column in row + 1..4 {
-            sum -= a[row][column] * x[column];
-        }
-        x[row] = sum / a[row][row];
-    }
-    x.iter().all(|value| value.is_finite()).then_some(x)
 }
 
 #[cfg(test)]

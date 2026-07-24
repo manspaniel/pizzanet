@@ -170,15 +170,19 @@ impl Map {
     }
 
     /// Creates a landmark anchored at `anchor` observing pixel bearing
-    /// `bearing`, at the depth prior.
+    /// `bearing`. New landmarks inherit the map's current mean converged
+    /// depth rather than the bootstrap prior — otherwise every fresh landmark
+    /// injects prior-scale back into a map whose gauge has already been
+    /// corrected, and the scale re-inflates continuously.
     pub fn create_landmark(&mut self, anchor: u32, bearing: DVec3) -> u32 {
         let id = self.next_landmark_id;
         self.next_landmark_id += 1;
+        let initial_depth = self.mean_scene_depth();
         self.landmarks.push(Landmark {
             id,
             anchor,
             bearing,
-            inverse_depth: 1.0 / INITIAL_DEPTH_METRES,
+            inverse_depth: 1.0 / initial_depth.clamp(0.2, 30.0),
             observation_count: 1,
             max_parallax_degrees: 0.0,
             outlier_streak: 0,

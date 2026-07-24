@@ -148,6 +148,7 @@ pub struct ArTracker {
     scale_initialized: bool,
     latest_scale_ratio: f64,
     scale_confidence: f64,
+    recent_scale_ratios: Vec<f64>,
 
     // Calibration.
     long_axis_field_of_view_degrees: f64,
@@ -207,6 +208,7 @@ impl ArTracker {
             scale_initialized: false,
             latest_scale_ratio: 1.0,
             scale_confidence: 0.0,
+            recent_scale_ratios: Vec::new(),
             long_axis_field_of_view_degrees: ESTIMATED_LONG_AXIS_FIELD_OF_VIEW_DEGREES,
             visual_orientation_delay_milliseconds: DEFAULT_VISUAL_ORIENTATION_DELAY_MILLISECONDS,
         }
@@ -438,6 +440,7 @@ impl ArTracker {
         self.scale_initialized = false;
         self.latest_scale_ratio = 1.0;
         self.scale_confidence = 0.0;
+        self.recent_scale_ratios.clear();
     }
 
     /// Returns `[x, y, z, qx, qy, qz, qw, confidence]` for the Three.js camera.
@@ -1129,17 +1132,34 @@ impl ArTracker {
         let confidence = (estimate.excitation / 2.0).clamp(0.0, 1.0);
         self.scale_confidence = self.scale_confidence * 0.9 + confidence * 0.1;
         if !self.scale_initialized {
+            // Initialize from the median of a small window of consistent
+            // estimates — the very first estimate over a short chain is the
+            // noisiest one and must not set the gauge alone.
             if confidence >= 0.4 {
-                let ratio = estimate.ratio.clamp(0.2, 5.0);
-                self.apply_map_scale(ratio);
-                self.scale_initialized = true;
+                self.recent_scale_ratios.push(estimate.ratio);
+                if self.recent_scale_ratios.len() > 5 {
+                    self.recent_scale_ratios.remove(0);
+                }
+                if self.recent_scale_ratios.len() >= 3 {
+                    let mut sorted = self.recent_scale_ratios.clone();
+                    sorted.sort_by(f64::total_cmp);
+                    let median = sorted[sorted.len() / 2];
+                    let consistent = sorted
+                        .iter()
+                        .all(|ratio| (ratio / median).ln().abs() < 0.35);
+                    if consistent {
+                        self.apply_map_scale(median.clamp(0.1, 6.0));
+                        self.scale_initialized = true;
+                        self.recent_scale_ratios.clear();
+                    }
+                }
             }
             return;
         }
-        // Maintenance: correct residual scale drift slowly and only when the
-        // observation is meaningfully away from unity.
-        if (estimate.ratio - 1.0).abs() > 0.05 {
-            let step = estimate.ratio.clamp(0.95, 1.05);
+        // Maintenance: correct residual scale drift steadily; bounded steps so
+        // the world never visibly jumps.
+        if (estimate.ratio - 1.0).abs() > 0.02 {
+            let step = estimate.ratio.clamp(0.93, 1.08);
             self.apply_map_scale(step);
         }
     }
