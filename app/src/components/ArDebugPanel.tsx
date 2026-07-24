@@ -150,6 +150,18 @@ export function ArDebugPanel({
               />{" "}
               smooth
             </label>
+            {nativeCamera && (
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.nativeBackdropEnabled}
+                  onChange={(event) =>
+                    onChange({ nativeBackdropEnabled: event.target.checked })
+                  }
+                />{" "}
+                bridged backdrop
+              </label>
+            )}
           </div>
 
           <div className="debug-stats">

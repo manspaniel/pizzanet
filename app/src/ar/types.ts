@@ -34,6 +34,11 @@ export interface TrackerDebugSettings {
   captureRateHz: CaptureRateHz;
   featureBudget: number;
   longAxisFieldOfViewDegrees: number;
+  /** Native-camera mode only: draw each bridged luma frame as a grayscale
+   * backdrop behind the AR canvas so the visible background matches the frame
+   * the overlay and pose derive from, instead of the fresher live native
+   * camera view. */
+  nativeBackdropEnabled: boolean;
   pointOverlayEnabled: boolean;
   relocalizationEnabled: boolean;
   renderSmoothingEnabled: boolean;
@@ -51,6 +56,7 @@ export function defaultTrackerDebugSettings(): TrackerDebugSettings {
     captureRateHz: 30,
     featureBudget: 130,
     longAxisFieldOfViewDegrees: 68,
+    nativeBackdropEnabled: true,
     pointOverlayEnabled: import.meta.env.DEV,
     relocalizationEnabled: true,
     renderSmoothingEnabled: true,

@@ -17,6 +17,9 @@ const radiansPerDegree = Math.PI / 180;
 // few milliseconds around the camera rate. The tolerance keeps a 30 Hz target
 // from skipping every other 30 fps camera frame.
 const captureIntervalToleranceMilliseconds = 5;
+// A native-frame clock offset this far below the running minimum cannot be
+// explained by delivery jitter; treat it as a clock jump and re-estimate.
+const nativeClockJumpMilliseconds = 500;
 const trackedPointRadiusCssPixels = 2.5;
 const trackedPointStateColors = [
   "#9e9e9e", // 0: new detection
@@ -81,6 +84,9 @@ function trackingState(code: number): TrackingState {
 
 export class FallbackArSession implements ArSessionController {
   private animationFrame = 0;
+  private backdropContext: CanvasRenderingContext2D | null = null;
+  private backdropImageData: ImageData | null = null;
+  private backdropSourceContext: CanvasRenderingContext2D | null = null;
   private captureContext: CanvasRenderingContext2D | null = null;
   private debugSettings: TrackerDebugSettings;
   private devRecording: DevRecording | null = null;
@@ -88,7 +94,9 @@ export class FallbackArSession implements ArSessionController {
   private frameHeight = 135;
   private frameWidth: number;
   private lastCaptureMilliseconds = 0;
+  private lastPushedNativeTimestampMilliseconds = Number.NEGATIVE_INFINITY;
   private lastStatusMilliseconds = 0;
+  private minimumNativeClockOffsetMilliseconds = Number.POSITIVE_INFINITY;
   private minimumCaptureIntervalMilliseconds: number;
   private motionPermissionGranted = false;
   private pointOverlayContext: CanvasRenderingContext2D | null = null;
@@ -97,6 +105,7 @@ export class FallbackArSession implements ArSessionController {
   private stream: MediaStream | null = null;
   private tracker: ArTracker | null = null;
   private videoFrameCallback = 0;
+  private readonly backdropCanvas: HTMLCanvasElement | null;
   private readonly canvas: HTMLCanvasElement;
   private readonly nativeMode = isNativeCameraMode();
   private readonly onStatus: (status: ArStatus) => void;
@@ -210,15 +219,21 @@ export class FallbackArSession implements ArSessionController {
   /**
    * Bridge entry point for native-camera mode. The native ARKit host pushes
    * already-downscaled grayscale frames (throttled to 30 Hz on the native
-   * side), so every call is processed. Frames are stamped with
-   * `performance.now()` at receipt: the native clock has a different base, and
-   * receipt time keeps frames on the same clock as the page's real
-   * devicemotion/deviceorientation events, which keep feeding the tracker
-   * exactly as in camera mode.
+   * side), so every call is processed.
+   *
+   * Frames are stamped by mapping the native capture timestamp onto the
+   * page's `performance.now()` clock instead of using receipt time: bridge
+   * delivery adds ~50-100 ms of jittery latency, and folding that into the
+   * frame clock misaligns frames with the page's devicemotion /
+   * deviceorientation events — during rotation the tracker then fuses
+   * wrong-instant orientation and manufactures false translation. The running
+   * minimum of `receipt - nativeTimestamp` estimates the constant clock
+   * offset, because the minimum-latency delivery carries the least bridge
+   * delay.
    */
   private readonly onNativeFrame = (
     frameId: number,
-    _nativeTimestampMilliseconds: number,
+    nativeTimestampMilliseconds: number,
     width: number,
     height: number,
     base64Luma: string,
@@ -238,9 +253,33 @@ export class FallbackArSession implements ArSessionController {
       this.frameHeight = height;
       this.configureSceneProjection();
     }
+    const offsetMilliseconds =
+      receiptTimestampMilliseconds - nativeTimestampMilliseconds;
+    if (
+      offsetMilliseconds <
+      this.minimumNativeClockOffsetMilliseconds - nativeClockJumpMilliseconds
+    ) {
+      // An offset far below the running minimum means one of the clocks
+      // jumped; restart the estimate rather than mapping across the jump.
+      this.minimumNativeClockOffsetMilliseconds = offsetMilliseconds;
+    } else if (offsetMilliseconds < this.minimumNativeClockOffsetMilliseconds) {
+      this.minimumNativeClockOffsetMilliseconds = offsetMilliseconds;
+    }
+    if (this.debugSettings.nativeBackdropEnabled) {
+      this.drawBackdrop(luma, width, height);
+    }
+    const frameTimestampMilliseconds =
+      nativeTimestampMilliseconds + this.minimumNativeClockOffsetMilliseconds;
+    // The tracker requires strictly increasing frame timestamps, and a drop
+    // in the offset estimate can map one frame slightly behind the previous
+    // push; skip it.
+    if (frameTimestampMilliseconds <= this.lastPushedNativeTimestampMilliseconds) {
+      return;
+    }
+    this.lastPushedNativeTimestampMilliseconds = frameTimestampMilliseconds;
     this.tracker.push_luma_frame(
       frameId,
-      receiptTimestampMilliseconds,
+      frameTimestampMilliseconds,
       width,
       height,
       luma,
@@ -254,12 +293,14 @@ export class FallbackArSession implements ArSessionController {
     video: HTMLVideoElement | null,
     canvas: HTMLCanvasElement,
     pointOverlayCanvas: HTMLCanvasElement,
+    backdropCanvas: HTMLCanvasElement | null,
     onStatus: (status: ArStatus) => void,
     initialDebugSettings: TrackerDebugSettings = defaultTrackerDebugSettings(),
   ) {
     this.video = video;
     this.canvas = canvas;
     this.pointOverlayCanvas = pointOverlayCanvas;
+    this.backdropCanvas = backdropCanvas;
     this.onStatus = onStatus;
     this.debugSettings = { ...initialDebugSettings };
     this.frameWidth = this.debugSettings.trackerFrameWidth;
@@ -352,7 +393,8 @@ export class FallbackArSession implements ArSessionController {
    * Native-camera mode start: no getUserMedia and no video element. The native
    * ARKit host owns the camera and pushes grayscale frames through
    * `window.__pizzanetNativeFrame`; the scene renders with a transparent clear
-   * color so the native camera view shows through behind it.
+   * color over the bridged-frame backdrop canvas (or, when the backdrop is
+   * toggled off, directly over the live native camera view).
    */
   private async startWithNativeFrames(): Promise<void> {
     const [motionPermissionGranted, wasmModule] = await Promise.all([
@@ -362,6 +404,12 @@ export class FallbackArSession implements ArSessionController {
     this.motionPermissionGranted = motionPermissionGranted;
     this.tracker = new wasmModule.ArTracker();
     this.pointOverlayContext = this.pointOverlayCanvas.getContext("2d");
+    if (this.backdropCanvas) {
+      this.backdropContext = this.backdropCanvas.getContext("2d");
+      this.backdropSourceContext = document
+        .createElement("canvas")
+        .getContext("2d");
+    }
 
     this.scene = new ThreeArScene(this.canvas);
     // The renderer already clears to transparent; keep the scene background
@@ -429,6 +477,9 @@ export class FallbackArSession implements ArSessionController {
     );
     if (!settings.pointOverlayEnabled) {
       this.clearPointOverlay();
+    }
+    if (!settings.nativeBackdropEnabled) {
+      this.clearBackdrop();
     }
     this.scene?.setPoseSmoothingEnabled(settings.renderSmoothingEnabled);
     if (!this.devRecording) {
@@ -510,8 +561,12 @@ export class FallbackArSession implements ArSessionController {
       this.video.srcObject = null;
     }
     this.clearPointOverlay();
+    this.clearBackdrop();
     this.scene?.dispose();
     this.tracker?.free();
+    this.backdropContext = null;
+    this.backdropImageData = null;
+    this.backdropSourceContext = null;
     this.captureContext = null;
     this.pointOverlayContext = null;
     this.scene = null;
@@ -707,6 +762,77 @@ export class FallbackArSession implements ArSessionController {
       context.beginPath();
       context.arc(displayX, displayY, trackedPointRadiusCssPixels, 0, Math.PI * 2);
       context.fill();
+    }
+  }
+
+  /**
+   * Draws a received bridged luma frame as a grayscale backdrop behind the
+   * Three.js canvas and point overlay. The overlay dots and cube pose derive
+   * from bridged frames that are ~2 frames older than the live native camera
+   * view, so compositing them over the live view makes them visibly lag;
+   * drawing the bridged frame itself as the backdrop keeps everything the
+   * user sees derived from the same frame. Uses the same cover-fit math as
+   * drawTrackedPoints so backdrop and dots align pixel-for-pixel.
+   */
+  private drawBackdrop(luma: Uint8Array, width: number, height: number): void {
+    const context = this.backdropContext;
+    const sourceContext = this.backdropSourceContext;
+    if (!context || !sourceContext) {
+      return;
+    }
+    const sourceCanvas = sourceContext.canvas;
+    if (sourceCanvas.width !== width || sourceCanvas.height !== height) {
+      sourceCanvas.width = width;
+      sourceCanvas.height = height;
+      this.backdropImageData = null;
+    }
+    this.backdropImageData ??= sourceContext.createImageData(width, height);
+    const rgba = this.backdropImageData.data;
+    const pixelCount = width * height;
+    for (let index = 0; index < pixelCount; index += 1) {
+      const value = luma[index];
+      const offset = index * 4;
+      rgba[offset] = value;
+      rgba[offset + 1] = value;
+      rgba[offset + 2] = value;
+      rgba[offset + 3] = 255;
+    }
+    sourceContext.putImageData(this.backdropImageData, 0, 0);
+
+    const backdropCanvas = context.canvas;
+    const displayWidth = backdropCanvas.clientWidth;
+    const displayHeight = backdropCanvas.clientHeight;
+    if (displayWidth === 0 || displayHeight === 0) {
+      return;
+    }
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const deviceWidth = Math.round(displayWidth * pixelRatio);
+    const deviceHeight = Math.round(displayHeight * pixelRatio);
+    if (
+      backdropCanvas.width !== deviceWidth ||
+      backdropCanvas.height !== deviceHeight
+    ) {
+      backdropCanvas.width = deviceWidth;
+      backdropCanvas.height = deviceHeight;
+    }
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    const coverScale = Math.max(displayWidth / width, displayHeight / height);
+    const coverOffsetX = (displayWidth - width * coverScale) / 2;
+    const coverOffsetY = (displayHeight - height * coverScale) / 2;
+    context.drawImage(
+      sourceCanvas,
+      coverOffsetX,
+      coverOffsetY,
+      width * coverScale,
+      height * coverScale,
+    );
+  }
+
+  private clearBackdrop(): void {
+    const context = this.backdropContext;
+    if (context) {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, context.canvas.width, context.canvas.height);
     }
   }
 

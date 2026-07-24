@@ -45,6 +45,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function Home() {
+  const backdropRef = useRef<HTMLCanvasElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const pointOverlayRef = useRef<HTMLCanvasElement>(null);
@@ -110,7 +111,14 @@ export function Home() {
     const session =
       !nativeCamera && webXrAvailable
         ? new WebXrArSession(canvas, overlay, setStatus)
-        : new FallbackArSession(video, canvas, pointOverlay, setStatus, debugSettings);
+        : new FallbackArSession(
+            video,
+            canvas,
+            pointOverlay,
+            backdropRef.current,
+            setStatus,
+            debugSettings,
+          );
     sessionRef.current = session;
 
     try {
@@ -181,6 +189,15 @@ export function Home() {
           ref={videoRef}
           aria-hidden="true"
           className={`camera-feed ${isWasmSession && isRunning ? "is-visible" : ""}`}
+        />
+      )}
+      {nativeCamera && (
+        <canvas
+          ref={backdropRef}
+          aria-hidden="true"
+          className={`bridged-backdrop ${
+            isRunning && debugSettings.nativeBackdropEnabled ? "is-visible" : ""
+          }`}
         />
       )}
       <canvas ref={canvasRef} className="ar-canvas" />

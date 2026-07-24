@@ -148,6 +148,7 @@ pub struct ArTracker {
     scale_initialized: bool,
     scale_locked: bool,
     scale_settled_observations: u32,
+    scale_excitation_accumulated: f64,
     latest_scale_ratio: f64,
     scale_confidence: f64,
     recent_scale_ratios: Vec<f64>,
@@ -210,6 +211,7 @@ impl ArTracker {
             scale_initialized: false,
             scale_locked: false,
             scale_settled_observations: 0,
+            scale_excitation_accumulated: 0.0,
             latest_scale_ratio: 1.0,
             scale_confidence: 0.0,
             recent_scale_ratios: Vec::new(),
@@ -444,6 +446,7 @@ impl ArTracker {
         self.scale_initialized = false;
         self.scale_locked = false;
         self.scale_settled_observations = 0;
+        self.scale_excitation_accumulated = 0.0;
         self.latest_scale_ratio = 1.0;
         self.scale_confidence = 0.0;
         self.recent_scale_ratios.clear();
@@ -1186,10 +1189,17 @@ impl ArTracker {
                 let step = (median.ln() * 0.25).exp().clamp(0.9, 1.12);
                 self.apply_map_scale(step);
             } else {
-                // Near-unity observation: count toward settling; lock after
-                // several in a row.
+                // Near-unity observation: count toward settling. Locking also
+                // requires substantial accumulated excitation — consecutive
+                // agreement alone only proves the estimator agrees with
+                // itself, and under calm motion it can be consistently wrong
+                // (a session was observed locking 10x off with low
+                // excitation).
                 self.scale_settled_observations = self.scale_settled_observations.saturating_add(1);
-                if self.scale_settled_observations >= 6 {
+                self.scale_excitation_accumulated += estimate.excitation;
+                if self.scale_settled_observations >= 6
+                    && self.scale_excitation_accumulated >= 10.0
+                {
                     self.scale_locked = true;
                 }
             }

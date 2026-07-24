@@ -55,6 +55,7 @@ button {
 }
 
 .camera-feed,
+.bridged-backdrop,
 .ar-canvas,
 .point-overlay,
 .interface-layer {
@@ -72,6 +73,21 @@ button {
 }
 
 .camera-feed.is-visible {
+  display: block;
+}
+
+/* Native-camera mode: grayscale copy of the latest bridged tracker frame,
+   drawn behind the AR canvas and point overlay (but over the transparent page
+   background) so the visible backdrop matches the frame the overlay dots and
+   cube pose were computed from. Toggling it off exposes the live native
+   camera view again. */
+.bridged-backdrop {
+  z-index: 0;
+  display: none;
+  pointer-events: none;
+}
+
+.bridged-backdrop.is-visible {
   display: block;
 }
 
