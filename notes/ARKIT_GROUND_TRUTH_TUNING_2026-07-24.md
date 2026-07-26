@@ -11,6 +11,38 @@ raw-input/ARKit-reference pairs. The Rust tracker consumes only:
 `arkit-poses.ndjson` is never passed to the tracker. It is used only after
 replay to score and tune the result.
 
+## 2026-07-27 presentation-pose jitter correction
+
+The live fallback mixed two different camera times in one published pose.
+Every luma callback assigned DeviceOrientation sampled at
+`frame_timestamp - 40 ms`, then the next sensor callback overwrote that
+quaternion with the newest attitude. At 30 Hz camera and roughly 60 Hz
+orientation/rendering, steady pans therefore produced a repeated
+old-frame/current-sensor sawtooth even while image-space LK points moved
+smoothly.
+
+Presentation and estimator state are now separate:
+
+- sensor callbacks update only the latest propagation attitude;
+- each accepted camera frame latches one frame-aligned presentation attitude,
+  which remains unchanged until the next displayed frame;
+- the default camera/orientation offset is 0 ms because literal browser events
+  and camera timestamps share the performance timeline;
+- non-zero delay remains a measured diagnostic override, not a delivery-latency
+  assumption;
+- a constant-velocity alpha-beta observer filters only published translation.
+  The SLAM position, map, visual corrections, and keyframe decisions remain
+  unsmoothed.
+
+Across the 10 moving ARKit-reference sessions, the presentation observer
+reduces mean frame-delta RMSE from 9.696 mm to 8.072 mm (16.8%). Mean
+rigid-aligned position RMSE changes by only 0.14 mm
+(0.416646 m to 0.416789 m), and one-second translation RMSE changes by
+0.82 mm (0.135317 m to 0.136136 m). On the literal browser recording from
+2026-07-26, median/p95 position second difference falls from
+1.84/16.84 mm to 1.01/9.44 mm while endpoint displacement is preserved
+(24.64 mm versus 24.99 mm).
+
 ## 2026-07-25 startup and WKWebView correction
 
 The 5/10 late metric-scale publication policy below was rejected after the

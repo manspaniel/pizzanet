@@ -6,6 +6,21 @@ A fourth 6.7 s capture is retained as a short auxiliary loop. Every luma file is
 `frame_count * 160 * 284` bytes, frame identifiers and timestamps are monotonic, and the one-blob
 MP4 files are valid. Replay uses `tracker-luma.gray`, not decoded video timestamps.
 
+## 2026-07-27 live timing correction
+
+The historical 40 ms visual offset below came from the older capture contract
+and must not be used as the live default. Literal browser camera and sensor
+events share the DOM performance timeline; synchronized ARKit replay also
+measures lower frame-to-frame orientation error at 0 ms.
+
+More importantly, the renderer previously alternated between the delayed
+camera-frame attitude and the newest asynchronous DeviceOrientation attitude.
+The latter is now propagation-only: presentation holds one camera-frame pose
+until the next frame. The July 26 literal browser bundle is the regression
+capture for this contract. See
+[`ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md`](ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md)
+for the measured before/after jitter results.
+
 The estimator does not use the lamp's dimensions or a detected lamp coordinate. Its supervised
 constraints are:
 

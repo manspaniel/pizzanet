@@ -1,9 +1,10 @@
 import * as THREE from "three";
 
 const cubeColor = new THREE.Color(0x8d35ff);
-// Device orientation is already smooth, and smoothing it here lags the video
-// during rotation, so orientation is applied directly. Position keeps a short
-// time constant to hide translation-solve jitter.
+// The tracker publishes a pose latched to the displayed camera frame and uses
+// a constant-velocity observer for translation. Extra renderer smoothing is a
+// diagnostic only: smoothing orientation here would lag the video, while
+// smoothing the whole position can make fixed content swim during real motion.
 const smoothedPositionTimeConstantSeconds = 0.05;
 const smoothedOrientationTimeConstantSeconds = 0;
 

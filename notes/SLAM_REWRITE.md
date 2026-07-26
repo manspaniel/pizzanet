@@ -23,11 +23,20 @@ split into `frontend.rs` (LK tracking), `map.rs` (keyframes + landmarks),
 > live fusion timing or fast-start scale tuning. See the 2026-07-25 addendum in
 > [`ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md`](ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md).
 
+> **2026-07-27 update:** estimator and presentation timing are now separate.
+> DeviceOrientation events update propagation state but cannot overwrite the
+> quaternion latched to the currently displayed camera frame. Live acquisition
+> defaults to zero visual-orientation offset, and a presentation-only
+> constant-velocity observer reduces translation correction vibration without
+> feeding lagged state back into SLAM. The 10-session ARKit frame-delta RMSE
+> improves by 16.8%; see the 2026-07-27 addendum in the tuning note.
+
 ## Architecture
 
-- **Orientation**: iOS/W3C device-orientation fusion, yaw-recentered. Never
-  optimized visually (better short-term than anything recoverable from these
-  frames; removes SO(3) params and the rotation gauge from every solve).
+- **Orientation**: iOS/W3C device-orientation fusion, yaw-recentered. The
+  estimator samples it at camera time; presentation latches that sample until
+  the next displayed frame instead of following asynchronous sensor callbacks.
+  Visual rotation remains an internal nuisance correction and is not published.
 - **Front-end** (`optical-flow-lk`): continuous frame-to-frame pyramidal LK
   tracks, gyro-seeded, forward-backward-culled, grid-Shi-Tomasi top-up every
   frame. Plus **keyframe re-acquisition**: lost landmarks are re-tracked from

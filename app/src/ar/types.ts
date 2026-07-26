@@ -47,10 +47,9 @@ export interface TrackerDebugSettings {
 }
 
 /**
- * Starts with the browser/native bridge calibration used by the live app.
- * The tracker itself defaults to zero orientation delay for already
- * synchronized raw replay; live acquisition can add bridge-specific delay
- * explicitly here.
+ * Camera frames and browser sensor events use the same performance timeline.
+ * Keep their default offset at zero; a non-zero diagnostic override must come
+ * from measured acquisition latency, never from bridge delivery time.
  */
 export function defaultTrackerDebugSettings(): TrackerDebugSettings {
   return {
@@ -65,7 +64,7 @@ export function defaultTrackerDebugSettings(): TrackerDebugSettings {
     // as a diagnostic override, but is intentionally off by default.
     renderSmoothingEnabled: false,
     trackerFrameWidth: 240,
-    visualOrientationDelayMilliseconds: 40,
+    visualOrientationDelayMilliseconds: 0,
   };
 }
 

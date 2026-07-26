@@ -194,12 +194,13 @@ fn motion_clock_preserves_valid_cadence_and_repairs_duplicates_only() {
 }
 
 #[test]
-fn optimization_corrections_are_smoothed_without_lagging_regular_motion() {
+fn optimization_corrections_remain_continuous_in_presentation_output() {
     let mut tracker = ArTracker::new();
     let correction = DVec3::new(0.4, -0.1, 0.2);
     let published_before = tracker.pose();
     tracker.camera_position += correction;
     tracker.publish_discontinuous_position_correction(correction);
+    tracker.update_presentation_position();
     let held = tracker.pose();
     assert!((held[0] - published_before[0]).abs() < 1.0e-12);
     assert!((held[1] - published_before[1]).abs() < 1.0e-12);
@@ -207,16 +208,87 @@ fn optimization_corrections_are_smoothed_without_lagging_regular_motion() {
 
     tracker.latest_frame_delta_seconds = OPTIMIZATION_CORRECTION_TIME_CONSTANT_SECONDS;
     tracker.decay_presentation_correction();
+    tracker.update_presentation_position();
     let eased = tracker.pose();
-    let applied_fraction = 1.0 - (-1.0_f64).exp();
+    let applied_fraction = (1.0 - (-1.0_f64).exp()) * PRESENTATION_POSITION_ALPHA;
     assert!((eased[0] - published_before[0] - correction.x * applied_fraction).abs() < 1.0e-12);
+}
 
-    let normal_motion = DVec3::new(0.05, 0.0, -0.03);
-    let before_normal_motion = tracker.pose();
-    tracker.camera_position += normal_motion;
-    let after_normal_motion = tracker.pose();
-    assert!((after_normal_motion[0] - before_normal_motion[0] - normal_motion.x).abs() < 1.0e-12);
-    assert!((after_normal_motion[2] - before_normal_motion[2] - normal_motion.z).abs() < 1.0e-12);
+#[test]
+fn presentation_observer_tracks_constant_velocity_without_steady_state_lag() {
+    let mut tracker = ArTracker::new();
+    tracker.update_presentation_position();
+    tracker.latest_frame_delta_seconds = 1.0 / 30.0;
+    let velocity = DVec3::new(0.45, -0.06, -0.3);
+    for frame in 1..=120 {
+        tracker.camera_position = DVec3::new(0.0, CAMERA_HEIGHT_METRES, 0.0)
+            + velocity * (f64::from(frame) * tracker.latest_frame_delta_seconds);
+        tracker.update_presentation_position();
+    }
+    let error = tracker
+        .presentation_position
+        .distance(tracker.camera_position);
+    assert!(error < 1.0e-4, "error={error}");
+}
+
+#[test]
+fn presentation_observer_attenuates_alternating_frame_corrections() {
+    let mut tracker = ArTracker::new();
+    tracker.update_presentation_position();
+    tracker.latest_frame_delta_seconds = 1.0 / 30.0;
+    let mut measurements = Vec::new();
+    let mut published = Vec::new();
+    for frame in 1..=90 {
+        let seconds = f64::from(frame) * tracker.latest_frame_delta_seconds;
+        let noise = if frame % 2 == 0 { 0.012 } else { -0.012 };
+        tracker.camera_position = DVec3::new(
+            0.25 * seconds + noise,
+            CAMERA_HEIGHT_METRES,
+            -0.18 * seconds - noise * 0.5,
+        );
+        measurements.push(tracker.camera_position);
+        tracker.update_presentation_position();
+        published.push(tracker.presentation_position);
+    }
+    let second_difference_rms = |positions: &[DVec3]| {
+        let squared_sum: f64 = positions
+            .windows(3)
+            .map(|window| (window[2] - window[1] * 2.0 + window[0]).length_squared())
+            .sum();
+        (squared_sum / (positions.len() - 2) as f64).sqrt()
+    };
+    let raw_rms = second_difference_rms(&measurements);
+    let published_rms = second_difference_rms(&published);
+    assert!(
+        published_rms < raw_rms * 0.65,
+        "raw={raw_rms} published={published_rms}"
+    );
+}
+
+#[test]
+fn camera_frame_orientation_is_not_overwritten_by_later_sensor_events() {
+    let frame = textured_frame();
+    let mut tracker = ArTracker::new();
+    assert!(tracker.set_visual_orientation_delay_milliseconds(40.0));
+    assert!(tracker.push_device_orientation(0.0, 90.0, 0.0, 0.0, 100.0));
+    assert!(tracker.push_device_orientation(10.0, 90.0, 0.0, 0.0, 140.0));
+    assert!(
+        tracker.push_luma_frame(1, 140.0, TEST_WIDTH as u32, TEST_HEIGHT as u32, &frame,) > 0.0
+    );
+    let frame_pose = tracker.pose();
+
+    assert!(tracker.push_device_orientation(20.0, 90.0, 0.0, 0.0, 160.0));
+    assert_eq!(
+        &tracker.pose()[3..7],
+        &frame_pose[3..7],
+        "sensor callbacks between video frames must not move world content"
+    );
+
+    assert!(
+        tracker.push_luma_frame(2, 180.0, TEST_WIDTH as u32, TEST_HEIGHT as u32, &frame,) > 0.0
+    );
+    let next_frame_pose = tracker.pose();
+    assert_ne!(&next_frame_pose[3..7], &frame_pose[3..7]);
 }
 
 #[test]

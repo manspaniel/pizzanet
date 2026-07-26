@@ -69,6 +69,15 @@ const GRAVITY_METRES_PER_SECOND_SQUARED: f64 = 9.806_65;
 /// leaving real per-frame motion unlagged. This replaces renderer-wide pose
 /// smoothing, which makes a fixed object swim behind every camera movement.
 const OPTIMIZATION_CORRECTION_TIME_CONSTANT_SECONDS: f64 = 0.08;
+/// Alpha-beta presentation observer gains. The internal SLAM position accepts
+/// visual corrections immediately; the published position follows a
+/// constant-velocity model so alternating frame-level corrections do not make
+/// fixed world content vibrate. Unlike a position low-pass, a constant-velocity
+/// observer has no steady-state lag during a smooth translation.
+const PRESENTATION_POSITION_ALPHA: f64 = 0.55;
+const PRESENTATION_VELOCITY_BETA: f64 = 0.12;
+const MAX_PRESENTATION_FRAME_DELTA_SECONDS: f64 = 0.12;
+const MAX_PRESENTATION_SPEED_METRES_PER_SECOND: f64 = 3.0;
 /// Keyframe positions and tiny preintegrations only; unlike the map history,
 /// this carries no images or feature descriptors.
 const SCALE_HISTORY_CAPACITY: usize = 128;
@@ -116,9 +125,13 @@ pub struct ArTracker {
     // Orientation and inertial pipeline.
     orientation_reference: Option<DQuat>,
     absolute_orientation: Option<DQuat>,
-    camera_orientation: DQuat,
+    latest_sensor_orientation: DQuat,
+    presentation_orientation: DQuat,
     camera_position: DVec3,
     presentation_position_offset: DVec3,
+    presentation_position: DVec3,
+    presentation_velocity_world_mps: DVec3,
+    presentation_position_initialized: bool,
     sensor_buffer: SensorBuffer,
     next_sensor_sequence: u64,
     last_raw_motion_timestamp_milliseconds: Option<f64>,
@@ -183,9 +196,13 @@ impl ArTracker {
         Self {
             orientation_reference: None,
             absolute_orientation: None,
-            camera_orientation: DQuat::IDENTITY,
+            latest_sensor_orientation: DQuat::IDENTITY,
+            presentation_orientation: DQuat::IDENTITY,
             camera_position: DVec3::new(0.0, CAMERA_HEIGHT_METRES, 0.0),
             presentation_position_offset: DVec3::ZERO,
+            presentation_position: DVec3::new(0.0, CAMERA_HEIGHT_METRES, 0.0),
+            presentation_velocity_world_mps: DVec3::ZERO,
+            presentation_position_initialized: false,
             sensor_buffer: SensorBuffer::new(SENSOR_BUFFER_CAPACITY, SensorTimeBasis::Event)
                 .expect("the fixed sensor buffer capacity is non-zero"),
             next_sensor_sequence: 0,
@@ -273,7 +290,15 @@ impl ArTracker {
         }
         self.orientation_reference
             .get_or_insert_with(|| yaw_reference(absolute));
-        self.update_camera_orientation();
+        self.update_sensor_orientation();
+        // Before the first camera frame there is nothing to synchronize the
+        // presentation pose with, so expose the latest attitude for startup
+        // status. Once frames begin, presentation orientation is latched only
+        // by `push_luma_frame`; later sensor callbacks must not move the virtual
+        // camera relative to an unchanged video frame.
+        if self.frame_count == 0 {
+            self.presentation_orientation = self.latest_sensor_orientation;
+        }
         self.orientation_samples += 1;
         true
     }
@@ -458,7 +483,13 @@ impl ArTracker {
         // Publish the much smoother DeviceOrientation attitude; a slow,
         // independently validated visual yaw prior can be added later without
         // leaking frame-level monocular noise into rendering.
-        self.camera_orientation = visual_orientation;
+        //
+        // Latch this attitude to the camera frame. DeviceOrientation callbacks
+        // may continue at a different cadence, but they must not overwrite the
+        // pose rendered over this frame; doing so alternates between an older
+        // frame-aligned attitude and the newest sensor attitude.
+        self.presentation_orientation = visual_orientation;
+        self.update_presentation_position();
         self.previous_frame_orientation = Some(refined_orientation);
         self.latest_frame_id = frame_id;
         self.latest_frame_timestamp = Some(timestamp);
@@ -470,10 +501,14 @@ impl ArTracker {
     pub fn recenter(&mut self) {
         if let Some(absolute) = self.absolute_orientation {
             self.orientation_reference = Some(yaw_reference(absolute));
-            self.update_camera_orientation();
+            self.update_sensor_orientation();
         }
         self.camera_position = DVec3::new(0.0, CAMERA_HEIGHT_METRES, 0.0);
         self.presentation_position_offset = DVec3::ZERO;
+        self.presentation_position = self.camera_position;
+        self.presentation_velocity_world_mps = DVec3::ZERO;
+        self.presentation_position_initialized = true;
+        self.presentation_orientation = self.latest_sensor_orientation;
         self.inertial_velocity_world_mps = DVec3::ZERO;
         self.position_before_inertial_prediction = self.camera_position;
         self.latest_frame_delta_seconds = 0.0;
@@ -502,16 +537,20 @@ impl ArTracker {
         self.scale_history.clear();
     }
 
-    /// Returns `[x, y, z, qx, qy, qz, qw, confidence]` for the Three.js camera.
+    /// Returns the frame-latched presentation pose as
+    /// `[x, y, z, qx, qy, qz, qw, confidence]` for the Three.js camera.
+    ///
+    /// Sensor events received after the latest camera frame update propagation
+    /// state but do not alter this pose.
     pub fn pose(&self) -> Vec<f64> {
         vec![
-            self.camera_position.x + self.presentation_position_offset.x,
-            self.camera_position.y + self.presentation_position_offset.y,
-            self.camera_position.z + self.presentation_position_offset.z,
-            self.camera_orientation.x,
-            self.camera_orientation.y,
-            self.camera_orientation.z,
-            self.camera_orientation.w,
+            self.presentation_position.x,
+            self.presentation_position.y,
+            self.presentation_position.z,
+            self.presentation_orientation.x,
+            self.presentation_orientation.y,
+            self.presentation_orientation.z,
+            self.presentation_orientation.w,
             self.confidence(),
         ]
     }
@@ -738,6 +777,34 @@ impl ArTracker {
 }
 
 impl ArTracker {
+    fn update_presentation_position(&mut self) {
+        let measurement = self.camera_position + self.presentation_position_offset;
+        let delta_seconds = self.latest_frame_delta_seconds;
+        if !self.presentation_position_initialized
+            || !delta_seconds.is_finite()
+            || delta_seconds <= 0.0
+            || delta_seconds > MAX_PRESENTATION_FRAME_DELTA_SECONDS
+        {
+            self.presentation_position = measurement;
+            self.presentation_velocity_world_mps = self.inertial_velocity_world_mps;
+            self.presentation_position_initialized = true;
+            return;
+        }
+
+        let predicted =
+            self.presentation_position + self.presentation_velocity_world_mps * delta_seconds;
+        let innovation = measurement - predicted;
+        self.presentation_position = predicted + innovation * PRESENTATION_POSITION_ALPHA;
+        self.presentation_velocity_world_mps +=
+            innovation * (PRESENTATION_VELOCITY_BETA / delta_seconds);
+        if self.presentation_velocity_world_mps.length() > MAX_PRESENTATION_SPEED_METRES_PER_SECOND
+        {
+            self.presentation_velocity_world_mps =
+                self.presentation_velocity_world_mps.normalize_or_zero()
+                    * MAX_PRESENTATION_SPEED_METRES_PER_SECOND;
+        }
+    }
+
     fn decay_presentation_correction(&mut self) {
         if self.presentation_position_offset.length_squared() < 1.0e-12 {
             self.presentation_position_offset = DVec3::ZERO;
@@ -758,13 +825,13 @@ impl ArTracker {
         }
     }
 
-    fn update_camera_orientation(&mut self) {
+    fn update_sensor_orientation(&mut self) {
         let (Some(reference), Some(absolute)) =
             (self.orientation_reference, self.absolute_orientation)
         else {
             return;
         };
-        self.camera_orientation = (reference.conjugate() * absolute).normalize();
+        self.latest_sensor_orientation = (reference.conjugate() * absolute).normalize();
     }
 
     fn raw_visual_orientation_at(&self, frame_timestamp_milliseconds: f64) -> DQuat {
@@ -779,7 +846,9 @@ impl ArTracker {
 
     fn absolute_orientation_at(&self, timestamp_milliseconds: f64) -> DQuat {
         let Some(first) = self.orientation_history.front() else {
-            return self.absolute_orientation.unwrap_or(self.camera_orientation);
+            return self
+                .absolute_orientation
+                .unwrap_or(self.latest_sensor_orientation);
         };
         let mut before = first;
         for after in self.orientation_history.iter().skip(1) {
@@ -899,7 +968,7 @@ impl ArTracker {
             let absolute = self.absolute_orientation_at(sample.event_timestamp().as_millis_f64());
             let body_to_world = self
                 .orientation_reference
-                .map_or(self.camera_orientation, |reference| {
+                .map_or(self.latest_sensor_orientation, |reference| {
                     (reference.conjugate() * absolute).normalize()
                 });
             let corrected_specific_force =
@@ -1465,6 +1534,9 @@ impl ArTracker {
             frame.position = pivot + (frame.position - pivot) * ratio;
         }
         self.inertial_velocity_world_mps *= ratio;
+        self.presentation_velocity_world_mps *= ratio;
+        self.presentation_position = pivot + (self.presentation_position - pivot) * ratio;
+        self.presentation_position_offset *= ratio;
         if scale_about_origin {
             self.camera_position = pivot + (self.camera_position - pivot) * ratio;
         }
