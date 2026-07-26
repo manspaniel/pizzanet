@@ -16,7 +16,9 @@
 //! scale and the system is unobservable, which is exactly when we must not
 //! touch the gauge.
 
+#[cfg(test)]
 use crate::map::Map;
+use crate::map::Preintegration;
 use vio_core::DVec3;
 
 /// Minimum contiguous keyframe pairs before an estimate is attempted.
@@ -38,20 +40,49 @@ pub struct ScaleEstimate {
     /// Summed |Δv| over the chain, m/s — the excitation that made the ratio
     /// observable.
     pub excitation: f64,
+    /// Normalized visual/inertial velocity-shape agreement in `[0, 1]`.
+    pub correlation: f64,
     /// Keyframe pairs in the solved chain (diagnostic).
     #[allow(dead_code)]
     pub pairs: usize,
 }
 
+/// Lightweight keyframe state retained beyond the image-heavy map window for
+/// scale calibration.
+#[derive(Clone, Copy, Debug)]
+pub struct ScaleFrame {
+    pub id: u32,
+    pub position: DVec3,
+    pub preintegration: Option<Preintegration>,
+}
+
 /// Estimates the metric-scale correction from the map's most recent contiguous
 /// chain of preintegrated keyframe pairs. Returns `None` when the chain is too
 /// short, too calm, or the solve is degenerate.
-pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
+#[cfg(test)]
+fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
+    let frames: Vec<ScaleFrame> = map
+        .keyframes
+        .iter()
+        .map(|keyframe| ScaleFrame {
+            id: keyframe.id,
+            position: keyframe.position,
+            preintegration: keyframe.preintegration,
+        })
+        .collect();
+    estimate_scale_frames(&frames)
+}
+
+/// Same solve over a lightweight history that can outlive map-image eviction.
+pub fn estimate_scale_frames(frames: &[ScaleFrame]) -> Option<ScaleEstimate> {
     // Collect the longest contiguous run of consecutive keyframes carrying
     // preintegration, ending at the newest keyframe.
     let mut pairs: Vec<(DVec3, f64, DVec3, DVec3)> = Vec::new();
-    for window in map.keyframes.windows(2).rev() {
+    for window in frames.windows(2).rev() {
         let (previous, current) = (&window[0], &window[1]);
+        if current.id != previous.id.saturating_add(1) {
+            break;
+        }
         let Some(preintegration) = current.preintegration else {
             break;
         };
@@ -68,10 +99,9 @@ pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
     pairs.reverse();
     #[cfg(not(target_arch = "wasm32"))]
     if std::env::var_os("AR_DEBUG_SCALE").is_some() {
-        let with_preint = map
-            .keyframes
+        let with_preint = frames
             .iter()
-            .filter(|keyframe| keyframe.preintegration.is_some())
+            .filter(|frame| frame.preintegration.is_some())
             .count();
         let span: f64 = pairs.iter().map(|(_, dt, _, _)| dt).sum();
         let excitation: f64 = pairs.iter().map(|(_, _, dv, _)| dv.length()).sum();
@@ -79,7 +109,7 @@ pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
             "scale-chain pairs={} kf_with_preint={}/{} span={:.2}s excitation={:.2}",
             pairs.len(),
             with_preint,
-            map.keyframes.len(),
+            frames.len(),
             span,
             excitation
         );
@@ -147,6 +177,7 @@ pub fn estimate_scale(map: &Map) -> Option<ScaleEstimate> {
     Some(ScaleEstimate {
         ratio,
         excitation,
+        correlation,
         pairs: pairs.len(),
     })
 }
@@ -198,9 +229,7 @@ mod tests {
                 Preintegration {
                     duration_seconds: dt,
                     delta_velocity: velocity(t) - velocity(t_previous),
-                    delta_position: position(t)
-                        - position(t_previous)
-                        - velocity(t_previous) * dt,
+                    delta_position: position(t) - position(t_previous) - velocity(t_previous) * dt,
                     sample_count: 24,
                 }
             });
@@ -223,16 +252,13 @@ mod tests {
         let mut map = Map::new();
         for step in 0..10 {
             let t = f64::from(step) * 0.4;
-            let preintegration = (step > 0).then(|| Preintegration {
+            let preintegration = (step > 0).then_some(Preintegration {
                 duration_seconds: 0.4,
                 delta_velocity: DVec3::ZERO,
                 delta_position: DVec3::ZERO,
                 sample_count: 24,
             });
-            map.push_keyframe(keyframe_at(
-                DVec3::new(0.3 * t, 1.6, 0.0),
-                preintegration,
-            ));
+            map.push_keyframe(keyframe_at(DVec3::new(0.3 * t, 1.6, 0.0), preintegration));
         }
         assert!(estimate_scale(&map).is_none());
     }

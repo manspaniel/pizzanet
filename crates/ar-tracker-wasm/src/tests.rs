@@ -154,6 +154,72 @@ fn invalid_motion_samples_do_not_enter_the_buffer() {
 }
 
 #[test]
+fn motion_clock_preserves_valid_cadence_and_repairs_duplicates_only() {
+    let mut tracker = ArTracker::new();
+    fn push(tracker: &mut ArTracker, event_timestamp: f64, receipt_timestamp: f64) -> f64 {
+        assert!(tracker.push_motion_sample(
+            event_timestamp,
+            receipt_timestamp,
+            16.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            9.806_65,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0,
+        ));
+        tracker.regularized_motion_timestamp_milliseconds.unwrap()
+    }
+    assert_eq!(push(&mut tracker, 1_000.0, 1_001.0), 1_000.0);
+    assert_eq!(push(&mut tracker, 1_020.0, 1_021.0), 1_020.0);
+    assert_eq!(push(&mut tracker, 1_020.0, 1_041.0), 1_036.0);
+    assert!(!tracker.push_motion_sample(
+        1_010.0, 1_050.0, 16.0, 0.0, 0.0, 0.0, 0.0, 9.806_65, 0.0, 0.0, 0.0, 0.0, 0,
+    ));
+    assert_eq!(
+        tracker.regularized_motion_timestamp_milliseconds,
+        Some(1_036.0)
+    );
+    assert!(tracker.push_motion_sample(
+        1_040.0, 1_060.0, 16.0, 0.0, 0.0, 0.0, 0.0, 9.806_65, 0.0, 0.0, 0.0, 0.0, 0,
+    ));
+    assert_eq!(
+        tracker.regularized_motion_timestamp_milliseconds,
+        Some(1_040.0)
+    );
+}
+
+#[test]
+fn optimization_corrections_are_smoothed_without_lagging_regular_motion() {
+    let mut tracker = ArTracker::new();
+    let correction = DVec3::new(0.4, -0.1, 0.2);
+    let published_before = tracker.pose();
+    tracker.camera_position += correction;
+    tracker.publish_discontinuous_position_correction(correction);
+    let held = tracker.pose();
+    assert!((held[0] - published_before[0]).abs() < 1.0e-12);
+    assert!((held[1] - published_before[1]).abs() < 1.0e-12);
+    assert!((held[2] - published_before[2]).abs() < 1.0e-12);
+
+    tracker.latest_frame_delta_seconds = OPTIMIZATION_CORRECTION_TIME_CONSTANT_SECONDS;
+    tracker.decay_presentation_correction();
+    let eased = tracker.pose();
+    let applied_fraction = 1.0 - (-1.0_f64).exp();
+    assert!((eased[0] - published_before[0] - correction.x * applied_fraction).abs() < 1.0e-12);
+
+    let normal_motion = DVec3::new(0.05, 0.0, -0.03);
+    let before_normal_motion = tracker.pose();
+    tracker.camera_position += normal_motion;
+    let after_normal_motion = tracker.pose();
+    assert!((after_normal_motion[0] - before_normal_motion[0] - normal_motion.x).abs() < 1.0e-12);
+    assert!((after_normal_motion[2] - before_normal_motion[2] - normal_motion.z).abs() < 1.0e-12);
+}
+
+#[test]
 fn bootstrap_frame_creates_keyframe_and_landmarks() {
     let tracker = tracker_with_first_frame(&textured_frame());
     assert_eq!(tracker.visual_keyframe_count(), 1);
@@ -306,7 +372,7 @@ fn feature_budget_and_fov_setters_validate_ranges() {
 // ---------------------------------------------------------------------------
 // Design-point simulation: 30 Hz, 3D structure, rotation + translation,
 // analytic IMU. Validates that landmark depths individualize from parallax,
-// the pose follows ground truth, and the pipeline stays in tracking state.
+// the pose follows ground truth, and the visual pipeline remains healthy.
 // ---------------------------------------------------------------------------
 
 struct SyntheticScene {
@@ -333,11 +399,8 @@ impl SyntheticScene {
     }
 
     fn render(&self, position: DVec3, orientation: DQuat, width: usize, height: usize) -> Vec<u8> {
-        let intrinsics = geometry::Intrinsics::new(
-            width,
-            height,
-            ESTIMATED_LONG_AXIS_FIELD_OF_VIEW_DEGREES,
-        );
+        let intrinsics =
+            geometry::Intrinsics::new(width, height, ESTIMATED_LONG_AXIS_FIELD_OF_VIEW_DEGREES);
         // Mild background gradient so empty regions are not perfectly flat.
         let mut frame = vec![0_u8; width * height];
         for y in 0..height {
@@ -427,7 +490,10 @@ fn design_point_sequence_tracks_and_converges_depth() {
     let truth = position_at((total_frames - 1) as f64 / FRAME_HZ);
     let error = DVec3::new(pose[0] - truth.x, pose[1] - truth.y, pose[2] - truth.z).length();
     assert!(pose.iter().all(|value| value.is_finite()), "pose={pose:?}");
+    // This synthetic sequence intentionally has no accelerometer stream, so
+    // metric scale remains provisional even though visual 6DoF is healthy.
     assert_eq!(tracker.tracking_state(), TRACKING_STATE_TRACKING);
+    assert!(!tracker.metric_scale_initialized());
     let stats = tracker.map_stats();
     // Depth must individualize: converged landmarks present, and mean scene
     // depth pulled away from the initialization prior toward the true scene.

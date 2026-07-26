@@ -1,7 +1,14 @@
 import type { ArTracker } from "../generated/ar-tracker-wasm/ar_tracker_wasm";
-import { requestMotionPermissions } from "./capabilities";
+import {
+  requestMotionPermissions,
+  type MotionPermissionOutcome,
+} from "./capabilities";
 import { DevRecording } from "./DevRecording";
-import { isNativeCameraMode } from "./nativeCameraMode";
+import {
+  isNativeCameraMode,
+  notifyNativeHost,
+  recordNativeRawInput,
+} from "./nativeCameraMode";
 import { ThreeArScene } from "./ThreeArScene";
 import type {
   ArSessionController,
@@ -99,7 +106,12 @@ export class FallbackArSession implements ArSessionController {
   private minimumNativeClockOffsetMilliseconds = Number.POSITIVE_INFINITY;
   private minimumCaptureIntervalMilliseconds: number;
   private motionPermissionGranted = false;
+  private motionPermissionOutcome: MotionPermissionOutcome | null = null;
+  private motionEventReceived = false;
+  private nativeLongAxisFieldOfViewDegrees: number | null = null;
+  private orientationEventReceived = false;
   private pointOverlayContext: CanvasRenderingContext2D | null = null;
+  private rawInputSequence = 0;
   private running = false;
   private scene: ThreeArScene | null = null;
   private stream: MediaStream | null = null;
@@ -114,6 +126,32 @@ export class FallbackArSession implements ArSessionController {
 
   private readonly onDeviceMotion = (event: DeviceMotionEvent) => {
     const receiptTimestampMilliseconds = performance.now();
+    recordNativeRawInput({
+      acceleration: {
+        x: event.acceleration?.x ?? null,
+        y: event.acceleration?.y ?? null,
+        z: event.acceleration?.z ?? null,
+      },
+      accelerationIncludingGravity: {
+        x: event.accelerationIncludingGravity?.x ?? null,
+        y: event.accelerationIncludingGravity?.y ?? null,
+        z: event.accelerationIncludingGravity?.z ?? null,
+      },
+      eventTimestampMilliseconds: event.timeStamp,
+      intervalMilliseconds: normalizedMotionIntervalMilliseconds(event.interval),
+      isTrusted: event.isTrusted,
+      kind: "device_motion",
+      receiptTimestampMilliseconds,
+      reportedInterval: event.interval,
+      rotationRateDegreesPerSecond: {
+        alpha: event.rotationRate?.alpha ?? null,
+        beta: event.rotationRate?.beta ?? null,
+        gamma: event.rotationRate?.gamma ?? null,
+      },
+      screenAngleDegrees: screenAngle(),
+      screenOrientation: screenOrientationType(),
+      sequence: this.rawInputSequence++,
+    });
     this.devRecording?.recordDeviceMotion(
       event,
       receiptTimestampMilliseconds,
@@ -135,6 +173,10 @@ export class FallbackArSession implements ArSessionController {
       force.z === null
     ) {
       return;
+    }
+    if (!this.motionEventReceived) {
+      this.motionEventReceived = true;
+      this.reportNativeSensorReadiness();
     }
     const sign = isAppleMobile() ? -1 : 1;
     const gyro = isAppleMobile()
@@ -164,9 +206,29 @@ export class FallbackArSession implements ArSessionController {
   };
 
   private readonly onDeviceOrientation = (event: DeviceOrientationEvent) => {
+    const receiptTimestampMilliseconds = performance.now();
+    const compassEvent = event as DeviceOrientationEvent & {
+      webkitCompassAccuracy?: number;
+      webkitCompassHeading?: number;
+    };
+    recordNativeRawInput({
+      absolute: event.absolute,
+      alphaDegrees: event.alpha,
+      betaDegrees: event.beta,
+      eventTimestampMilliseconds: event.timeStamp,
+      gammaDegrees: event.gamma,
+      isTrusted: event.isTrusted,
+      kind: "device_orientation",
+      receiptTimestampMilliseconds,
+      screenAngleDegrees: screenAngle(),
+      screenOrientation: screenOrientationType(),
+      sequence: this.rawInputSequence++,
+      webkitCompassAccuracy: compassEvent.webkitCompassAccuracy ?? null,
+      webkitCompassHeading: compassEvent.webkitCompassHeading ?? null,
+    });
     this.devRecording?.recordDeviceOrientation(
       event,
-      performance.now(),
+      receiptTimestampMilliseconds,
       screenAngle(),
       screenOrientationType(),
     );
@@ -177,6 +239,10 @@ export class FallbackArSession implements ArSessionController {
       event.gamma === null
     ) {
       return;
+    }
+    if (!this.orientationEventReceived) {
+      this.orientationEventReceived = true;
+      this.reportNativeSensorReadiness();
     }
     this.tracker.push_device_orientation(
       event.alpha,
@@ -237,18 +303,64 @@ export class FallbackArSession implements ArSessionController {
     width: number,
     height: number,
     base64Luma: string,
+    longAxisFieldOfViewDegrees?: number,
   ): void => {
     const receiptTimestampMilliseconds = performance.now();
     if (!this.running || !this.tracker || width <= 0 || height <= 0) {
+      recordNativeRawInput({
+        accepted: false,
+        frameHeight: height,
+        frameId,
+        frameWidth: width,
+        kind: "native_frame_timing",
+        longAxisFieldOfViewDegrees: longAxisFieldOfViewDegrees ?? null,
+        nativeTimestampMilliseconds,
+        receiptTimestampMilliseconds,
+        rejectionReason: "tracker_not_ready",
+        sequence: this.rawInputSequence++,
+      });
       return;
     }
     const luma = Uint8Array.from(atob(base64Luma), (character) =>
       character.charCodeAt(0),
     );
     if (luma.length < width * height) {
+      recordNativeRawInput({
+        accepted: false,
+        frameHeight: height,
+        frameId,
+        frameWidth: width,
+        kind: "native_frame_timing",
+        longAxisFieldOfViewDegrees: longAxisFieldOfViewDegrees ?? null,
+        nativeTimestampMilliseconds,
+        receiptTimestampMilliseconds,
+        rejectionReason: "short_luma",
+        sequence: this.rawInputSequence++,
+      });
       return;
     }
-    if (width !== this.frameWidth || height !== this.frameHeight) {
+    const calibrationChanged =
+      typeof longAxisFieldOfViewDegrees === "number" &&
+      Number.isFinite(longAxisFieldOfViewDegrees) &&
+      longAxisFieldOfViewDegrees >= 30 &&
+      longAxisFieldOfViewDegrees <= 130 &&
+      // Landmark bearings currently share one session-wide intrinsics model.
+      // Freeze the first native calibration rather than rewriting that model
+      // for tiny per-frame ARKit intrinsics fluctuations.
+      this.nativeLongAxisFieldOfViewDegrees === null;
+    if (
+      calibrationChanged &&
+      this.tracker.set_long_axis_field_of_view_degrees(
+        longAxisFieldOfViewDegrees,
+      )
+    ) {
+      this.nativeLongAxisFieldOfViewDegrees = longAxisFieldOfViewDegrees;
+    }
+    if (
+      width !== this.frameWidth ||
+      height !== this.frameHeight ||
+      calibrationChanged
+    ) {
       this.frameWidth = width;
       this.frameHeight = height;
       this.configureSceneProjection();
@@ -274,9 +386,38 @@ export class FallbackArSession implements ArSessionController {
     // in the offset estimate can map one frame slightly behind the previous
     // push; skip it.
     if (frameTimestampMilliseconds <= this.lastPushedNativeTimestampMilliseconds) {
+      recordNativeRawInput({
+        accepted: false,
+        frameHeight: height,
+        frameId,
+        frameWidth: width,
+        kind: "native_frame_timing",
+        longAxisFieldOfViewDegrees: longAxisFieldOfViewDegrees ?? null,
+        minimumNativeClockOffsetMilliseconds:
+          this.minimumNativeClockOffsetMilliseconds,
+        nativeTimestampMilliseconds,
+        performanceTimestampMilliseconds: frameTimestampMilliseconds,
+        receiptTimestampMilliseconds,
+        rejectionReason: "non_monotonic_mapped_timestamp",
+        sequence: this.rawInputSequence++,
+      });
       return;
     }
     this.lastPushedNativeTimestampMilliseconds = frameTimestampMilliseconds;
+    recordNativeRawInput({
+      accepted: true,
+      frameHeight: height,
+      frameId,
+      frameWidth: width,
+      kind: "native_frame_timing",
+      longAxisFieldOfViewDegrees: longAxisFieldOfViewDegrees ?? null,
+      minimumNativeClockOffsetMilliseconds:
+        this.minimumNativeClockOffsetMilliseconds,
+      nativeTimestampMilliseconds,
+      performanceTimestampMilliseconds: frameTimestampMilliseconds,
+      receiptTimestampMilliseconds,
+      sequence: this.rawInputSequence++,
+    });
     this.tracker.push_luma_frame(
       frameId,
       frameTimestampMilliseconds,
@@ -339,10 +480,10 @@ export class FallbackArSession implements ArSessionController {
     const modulePromise = loadWasm();
 
     let stream: MediaStream;
-    let motionPermissionGranted: boolean;
+    let motionPermissionOutcome: MotionPermissionOutcome;
     let wasmModule: Awaited<ReturnType<typeof loadWasm>>;
     try {
-      [stream, motionPermissionGranted, wasmModule] = await Promise.all([
+      [stream, motionPermissionOutcome, wasmModule] = await Promise.all([
         streamPromise,
         motionPermissionPromise,
         modulePromise,
@@ -356,7 +497,8 @@ export class FallbackArSession implements ArSessionController {
       throw error;
     }
     this.stream = stream;
-    this.motionPermissionGranted = motionPermissionGranted;
+    this.motionPermissionOutcome = motionPermissionOutcome;
+    this.motionPermissionGranted = motionPermissionOutcome.state === "granted";
     this.tracker = new wasmModule.ArTracker();
 
     video.srcObject = stream;
@@ -397,11 +539,13 @@ export class FallbackArSession implements ArSessionController {
    * toggled off, directly over the live native camera view).
    */
   private async startWithNativeFrames(): Promise<void> {
-    const [motionPermissionGranted, wasmModule] = await Promise.all([
+    const [motionPermissionOutcome, wasmModule] = await Promise.all([
       requestMotionPermissions(),
       loadWasm(),
     ]);
-    this.motionPermissionGranted = motionPermissionGranted;
+    this.motionPermissionOutcome = motionPermissionOutcome;
+    this.motionPermissionGranted = motionPermissionOutcome.state === "granted";
+    this.reportNativeSensorReadiness();
     this.tracker = new wasmModule.ArTracker();
     this.pointOverlayContext = this.pointOverlayCanvas.getContext("2d");
     if (this.backdropCanvas) {
@@ -493,9 +637,13 @@ export class FallbackArSession implements ArSessionController {
     );
     this.tracker.set_feature_budget(settings.featureBudget);
     this.tracker.set_relocalization_enabled(settings.relocalizationEnabled);
+    const calibratedFieldOfView =
+      this.nativeMode && this.nativeLongAxisFieldOfViewDegrees !== null
+        ? this.nativeLongAxisFieldOfViewDegrees
+        : settings.longAxisFieldOfViewDegrees;
     if (
       this.tracker.set_long_axis_field_of_view_degrees(
-        settings.longAxisFieldOfViewDegrees,
+        calibratedFieldOfView,
       )
     ) {
       // Keep the virtual camera projection consistent with the source FOV.
@@ -541,6 +689,9 @@ export class FallbackArSession implements ArSessionController {
 
   async stop(): Promise<void> {
     this.running = false;
+    this.motionEventReceived = false;
+    this.orientationEventReceived = false;
+    this.reportNativeSensorReadiness();
     cancelAnimationFrame(this.animationFrame);
     if (this.videoFrameCallback !== 0 && this.video) {
       this.video.cancelVideoFrameCallback(this.videoFrameCallback);
@@ -569,6 +720,7 @@ export class FallbackArSession implements ArSessionController {
     this.backdropSourceContext = null;
     this.captureContext = null;
     this.pointOverlayContext = null;
+    this.nativeLongAxisFieldOfViewDegrees = null;
     this.scene = null;
     this.stream = null;
     this.tracker = null;
@@ -590,24 +742,30 @@ export class FallbackArSession implements ArSessionController {
     }
 
     const pose = this.tracker.pose();
+    const state = trackingState(this.tracker.tracking_state());
+    const metricScaleInitialized = this.tracker.metric_scale_initialized();
     this.scene.setCameraPose(pose);
+    // Monocular metric scale cannot be observed at a stationary first frame.
+    // Publish the stable provisional gauge immediately; background scale
+    // diagnostics must never hide or silently resize an existing world.
+    this.scene.setWorldContentVisible(true);
     this.scene.render(timestampMilliseconds);
 
     if (timestampMilliseconds - this.lastStatusMilliseconds >= 250) {
-      const state = trackingState(this.tracker.tracking_state());
       const mapStats = this.tracker.map_stats();
+      const frameCount = Number(this.tracker.frame_count());
       this.onStatus({
         backend: "wasm",
         confidence: this.tracker.confidence(),
         convergedLandmarks: mapStats[2] ?? 0,
-        frames: Number(this.tracker.frame_count()),
+        frames: frameCount,
         inliers: this.tracker.visual_inlier_count(),
         keyframes: mapStats[0] ?? 0,
         landmarks: mapStats[1] ?? 0,
         linearAcceleration: this.tracker.linear_acceleration_magnitude(),
         matches: this.tracker.visual_match_count(),
         meanSceneDepthMetres: mapStats[3] ?? 0,
-        message: this.statusMessage(state),
+        message: this.statusMessage(state, metricScaleInitialized, frameCount),
         motionSamples: Number(this.tracker.motion_sample_count()),
         position: [pose[0], pose[1], pose[2]],
         relocalizations: Number(this.tracker.visual_relocalization_count()),
@@ -844,16 +1002,49 @@ export class FallbackArSession implements ArSessionController {
     }
   }
 
-  private statusMessage(state: TrackingState): string {
+  private statusMessage(
+    state: TrackingState,
+    metricScaleInitialized: boolean,
+    frameCount: number,
+  ): string {
     if (!this.motionPermissionGranted) {
-      return "Camera active; motion access was denied.";
+      const detail = this.motionPermissionOutcome?.errorName;
+      return detail
+        ? `Motion access failed (${detail}). Tap Exit, then Start AR and allow Motion & Orientation.`
+        : "Motion access was denied. Tap Exit, then Start AR and allow Motion & Orientation.";
+    }
+    if (frameCount >= 30 && !this.motionEventReceived) {
+      return "Motion permission succeeded, but WKWebView sent no devicemotion events.";
+    }
+    if (frameCount >= 30 && !this.orientationEventReceived) {
+      return "Motion arrived, but WKWebView sent no deviceorientation events.";
     }
     if (state === "initializing") {
       return "Move the phone gently while orientation initializes.";
     }
     if (state === "tracking") {
-      return "Visual-inertial translation is active. Move slowly around the cube.";
+      return metricScaleInitialized
+        ? "Visual-inertial translation is active; metric scale is certified."
+        : "Visual-inertial translation is active with a provisional scale; no late resize will occur.";
     }
-    return "Heading is live. Point at a textured scene and move slowly to initialize translation.";
+    return frameCount < 30
+      ? "The cube is ready. Point at texture and begin moving slowly."
+      : "The cube remains available; visual tracking is limited. Point at texture and move slowly.";
+  }
+
+  private reportNativeSensorReadiness(): void {
+    if (!this.nativeMode) {
+      return;
+    }
+    notifyNativeHost({
+      kind: "sensor_readiness",
+      motionEventReceived: this.motionEventReceived,
+      orientationEventReceived: this.orientationEventReceived,
+      permissionApi: this.motionPermissionOutcome?.api ?? null,
+      permissionErrorMessage: this.motionPermissionOutcome?.errorMessage ?? null,
+      permissionErrorName: this.motionPermissionOutcome?.errorName ?? null,
+      permissionState: this.motionPermissionOutcome?.state ?? "pending",
+      receiptTimestampMilliseconds: performance.now(),
+    });
   }
 }

@@ -6,6 +6,23 @@ split into `frontend.rs` (LK tracking), `map.rs` (keyframes + landmarks),
 `estimator.rs` (arael solvers), `reloc.rs` (appearance relocalization, ported),
 `geometry.rs`, `lib.rs` (orchestration + wasm API).
 
+> **2026-07-24 update:** the fixed-rotation per-frame design below is now a
+> retained native replay ablation, not the default. The live path uses bounded
+> robust 6DoF refinement (`pose_refine.rs`) while publishing smooth
+> DeviceOrientation attitude, a correlation/excitation-gated origin-consistent
+> metric bootstrap, transactional BA writeback, and correction-only
+> presentation smoothing. See
+> [`ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md`](ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md)
+> for the synchronized ARKit evaluation.
+
+> **2026-07-25 update:** metric certification is no longer a visibility or
+> tracking-state gate. Production publishes an immediate provisional render
+> gauge and never applies the late whole-map rescale; the previous initializer
+> is available only with `AR_APPLY_EXPERIMENTAL_SCALE=1` in native replay.
+> Literal WKWebView sensor/frame-clock capture is now required before further
+> live fusion timing or fast-start scale tuning. See the 2026-07-25 addendum in
+> [`ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md`](ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md).
+
 ## Architecture
 
 - **Orientation**: iOS/W3C device-orientation fusion, yaw-recentered. Never

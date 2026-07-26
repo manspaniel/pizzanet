@@ -6,16 +6,18 @@
 //!
 //! Architecture (visual-primary, IMU-hinted):
 //! - Orientation comes from iOS/W3C device-orientation fusion, yaw-recentered;
-//!   it is never optimized visually.
+//!   this smooth attitude is published unchanged. A bounded robust 6DoF
+//!   visual solve estimates a per-frame nuisance rotation internally so small
+//!   IMU residuals are not misread as translation.
 //! - A continuous Lucas-Kanade front-end ([`frontend`]) advances long-lived
 //!   pixel tracks every frame, seeded by IMU-rotation-compensated predictions.
 //! - A keyframe map ([`map`]) anchors tracks as inverse-depth landmarks — no
 //!   global scene-depth assumption; every landmark owns its depth.
-//! - An `arael`-based estimator ([`estimator`]) refines the camera position
-//!   every frame against the landmark map and runs sliding-window
-//!   visual-inertial bundle adjustment at keyframe rate, where preintegrated
-//!   accelerometer factors make the monocular reconstruction metric (scale
-//!   starts at a prior and converges silently as the phone translates).
+//! - A bounded dense pose refiner ([`pose_refine`]) updates each frame; an
+//!   `arael` estimator ([`estimator`]) runs transactional sliding-window
+//!   visual-inertial bundle adjustment at keyframe rate. Correlated
+//!   accelerometer factors continuously constrain the monocular gauge; a
+//!   provisional, session-stable render gauge is available immediately.
 //! - Appearance relocalization ([`reloc`]) cancels drift when a previously
 //!   mapped view is revisited.
 
@@ -25,10 +27,11 @@ mod estimator;
 mod frontend;
 mod geometry;
 mod map;
+mod pose_refine;
 mod reloc;
 mod scale;
 
-use estimator::{FrameObservation, solve_frame_pose, solve_window};
+use estimator::{FrameObservation, FramePoseSolution, solve_frame_pose, solve_window};
 use frontend::{FrontEnd, TrackState};
 use geometry::Intrinsics;
 use glam::EulerRot;
@@ -50,7 +53,10 @@ const DEFAULT_FEATURE_BUDGET: usize = 130;
 const MIN_VISUAL_INLIERS: usize = 8;
 const SENSOR_BUFFER_CAPACITY: usize = 512;
 const ORIENTATION_HISTORY_CAPACITY: usize = 256;
-const DEFAULT_VISUAL_ORIENTATION_DELAY_MILLISECONDS: f64 = 40.0;
+// Raw camera and sensor timestamps share one monotonic clock. Browser/native
+// bridge latency is an acquisition-layer concern and is configured explicitly
+// by the app rather than baked into the estimator.
+const DEFAULT_VISUAL_ORIENTATION_DELAY_MILLISECONDS: f64 = 0.0;
 const INITIAL_ACCELEROMETER_BIAS_SAMPLES: u64 = 45;
 const MAX_INERTIAL_SPEED_METRES_PER_SECOND: f64 = 2.0;
 const INERTIAL_VELOCITY_DAMPING_PER_SECOND: f64 = 0.35;
@@ -59,6 +65,13 @@ const INERTIAL_VERTICAL_DAMPING_PER_SECOND: f64 = 1.0;
 const VISUAL_VELOCITY_CORRECTION_GAIN: f64 = 0.25;
 const STATIONARY_TRANSLATION_DEADBAND_METRES: f64 = 0.02;
 const GRAVITY_METRES_PER_SECOND_SQUARED: f64 = 9.806_65;
+/// Ease optimizer/relocalization corrections into the published pose while
+/// leaving real per-frame motion unlagged. This replaces renderer-wide pose
+/// smoothing, which makes a fixed object swim behind every camera movement.
+const OPTIMIZATION_CORRECTION_TIME_CONSTANT_SECONDS: f64 = 0.08;
+/// Keyframe positions and tiny preintegrations only; unlike the map history,
+/// this carries no images or feature descriptors.
+const SCALE_HISTORY_CAPACITY: usize = 128;
 
 /// Keyframe creation policy.
 const KEYFRAME_MIN_FRAME_GAP: u64 = 3;
@@ -105,8 +118,10 @@ pub struct ArTracker {
     absolute_orientation: Option<DQuat>,
     camera_orientation: DQuat,
     camera_position: DVec3,
+    presentation_position_offset: DVec3,
     sensor_buffer: SensorBuffer,
     next_sensor_sequence: u64,
+    last_raw_motion_timestamp_milliseconds: Option<f64>,
     regularized_motion_timestamp_milliseconds: Option<f64>,
     orientation_samples: u64,
     orientation_history: VecDeque<TimedOrientation>,
@@ -115,6 +130,7 @@ pub struct ArTracker {
     latest_linear_acceleration_mps2: f64,
     has_linear_acceleration: bool,
     linear_acceleration_bias_device_mps2: DVec3,
+    linear_acceleration_bias_samples: u64,
     inertial_velocity_world_mps: DVec3,
     position_before_inertial_prediction: DVec3,
     latest_frame_delta_seconds: f64,
@@ -149,6 +165,7 @@ pub struct ArTracker {
     latest_scale_ratio: f64,
     scale_confidence: f64,
     recent_scale_ratios: Vec<f64>,
+    scale_history: VecDeque<scale::ScaleFrame>,
 
     // Calibration.
     long_axis_field_of_view_degrees: f64,
@@ -168,9 +185,11 @@ impl ArTracker {
             absolute_orientation: None,
             camera_orientation: DQuat::IDENTITY,
             camera_position: DVec3::new(0.0, CAMERA_HEIGHT_METRES, 0.0),
+            presentation_position_offset: DVec3::ZERO,
             sensor_buffer: SensorBuffer::new(SENSOR_BUFFER_CAPACITY, SensorTimeBasis::Event)
                 .expect("the fixed sensor buffer capacity is non-zero"),
             next_sensor_sequence: 0,
+            last_raw_motion_timestamp_milliseconds: None,
             regularized_motion_timestamp_milliseconds: None,
             orientation_samples: 0,
             orientation_history: VecDeque::new(),
@@ -179,6 +198,7 @@ impl ArTracker {
             latest_linear_acceleration_mps2: 0.0,
             has_linear_acceleration: false,
             linear_acceleration_bias_device_mps2: DVec3::ZERO,
+            linear_acceleration_bias_samples: 0,
             inertial_velocity_world_mps: DVec3::ZERO,
             position_before_inertial_prediction: DVec3::new(0.0, CAMERA_HEIGHT_METRES, 0.0),
             latest_frame_delta_seconds: 0.0,
@@ -209,6 +229,7 @@ impl ArTracker {
             latest_scale_ratio: 1.0,
             scale_confidence: 0.0,
             recent_scale_ratios: Vec::new(),
+            scale_history: VecDeque::new(),
             long_axis_field_of_view_degrees: ESTIMATED_LONG_AXIS_FIELD_OF_VIEW_DEGREES,
             visual_orientation_delay_milliseconds: DEFAULT_VISUAL_ORIENTATION_DELAY_MILLISECONDS,
         }
@@ -275,8 +296,11 @@ impl ArTracker {
         linear_acceleration_z_metres_per_second_squared: f64,
         screen_orientation_code: u8,
     ) -> bool {
-        let regularized_timestamp_milliseconds = self
-            .next_regularized_motion_timestamp(event_timestamp_milliseconds, interval_milliseconds);
+        let Some(regularized_timestamp_milliseconds) = self
+            .next_regularized_motion_timestamp(event_timestamp_milliseconds, interval_milliseconds)
+        else {
+            return false;
+        };
         let Ok(event_timestamp) =
             MonotonicTimestamp::try_from_millis_f64(regularized_timestamp_milliseconds)
         else {
@@ -329,6 +353,12 @@ impl ArTracker {
             return false;
         };
 
+        if self
+            .last_raw_motion_timestamp_milliseconds
+            .is_none_or(|previous| event_timestamp_milliseconds > previous)
+        {
+            self.last_raw_motion_timestamp_milliseconds = Some(event_timestamp_milliseconds);
+        }
         self.regularized_motion_timestamp_milliseconds = Some(regularized_timestamp_milliseconds);
         self.next_sensor_sequence = self.next_sensor_sequence.saturating_add(1);
         let outcome = self.sensor_buffer.push(sample);
@@ -347,12 +377,26 @@ impl ArTracker {
         }
         if let Some(linear_acceleration) = linear_acceleration {
             let magnitude = linear_acceleration.length();
-            if self.motion_samples < INITIAL_ACCELEROMETER_BIAS_SAMPLES && magnitude < 1.5 {
-                let sample_count = (self.motion_samples + 1) as f64;
+            let gyro_magnitude = DVec3::new(
+                gyro_x_radians_per_second,
+                gyro_y_radians_per_second,
+                gyro_z_radians_per_second,
+            )
+            .length();
+            // Estimate hardware/CoreMotion residual only from genuinely still
+            // samples. The former 1.5 m/s² gate absorbed deliberate motion
+            // during the first second into "bias", corrupting metric scale for
+            // the rest of the session.
+            if self.linear_acceleration_bias_samples < INITIAL_ACCELEROMETER_BIAS_SAMPLES
+                && magnitude < 0.2
+                && gyro_magnitude < 0.08
+            {
+                let sample_count = (self.linear_acceleration_bias_samples + 1) as f64;
                 let gain = 1.0 / sample_count;
                 self.linear_acceleration_bias_device_mps2 = self
                     .linear_acceleration_bias_device_mps2
                     .lerp(linear_acceleration, gain);
+                self.linear_acceleration_bias_samples += 1;
             }
             self.latest_linear_acceleration_mps2 = if self.has_linear_acceleration {
                 self.latest_linear_acceleration_mps2 * 0.9 + magnitude * 0.1
@@ -396,15 +440,26 @@ impl ArTracker {
         self.latest_texture_score = texture_score(width as usize, pixels);
         self.position_before_inertial_prediction = self.camera_position;
         self.predict_inertial_translation(timestamp);
-        let visual_orientation = self.visual_orientation_at(timestamp_milliseconds);
-        self.process_frame(
+        self.decay_presentation_correction();
+        // Each frame starts from the synchronized IMU attitude, not the prior
+        // frame's visual correction. This prevents small monocular rotation
+        // biases from integrating into yaw drift while still letting the
+        // robust 6DoF solve absorb the current frame's residual.
+        let visual_orientation = self.raw_visual_orientation_at(timestamp_milliseconds);
+        let refined_orientation = self.process_frame(
             frame_id,
             width as usize,
             height as usize,
             pixels,
             visual_orientation,
         );
-        self.previous_frame_orientation = Some(visual_orientation);
+        // The refined orientation is an internal nuisance state that prevents
+        // small attitude residuals from being manufactured into translation.
+        // Publish the much smoother DeviceOrientation attitude; a slow,
+        // independently validated visual yaw prior can be added later without
+        // leaking frame-level monocular noise into rendering.
+        self.camera_orientation = visual_orientation;
+        self.previous_frame_orientation = Some(refined_orientation);
         self.latest_frame_id = frame_id;
         self.latest_frame_timestamp = Some(timestamp);
         self.frame_count += 1;
@@ -418,11 +473,14 @@ impl ArTracker {
             self.update_camera_orientation();
         }
         self.camera_position = DVec3::new(0.0, CAMERA_HEIGHT_METRES, 0.0);
+        self.presentation_position_offset = DVec3::ZERO;
         self.inertial_velocity_world_mps = DVec3::ZERO;
         self.position_before_inertial_prediction = self.camera_position;
         self.latest_frame_delta_seconds = 0.0;
         self.inertial_stationary_candidate = false;
         self.consecutive_stationary_frames = 0;
+        self.linear_acceleration_bias_device_mps2 = DVec3::ZERO;
+        self.linear_acceleration_bias_samples = 0;
         self.frontend.reset();
         self.map.reset();
         self.preintegration = Preintegration::default();
@@ -441,14 +499,15 @@ impl ArTracker {
         self.latest_scale_ratio = 1.0;
         self.scale_confidence = 0.0;
         self.recent_scale_ratios.clear();
+        self.scale_history.clear();
     }
 
     /// Returns `[x, y, z, qx, qy, qz, qw, confidence]` for the Three.js camera.
     pub fn pose(&self) -> Vec<f64> {
         vec![
-            self.camera_position.x,
-            self.camera_position.y,
-            self.camera_position.z,
+            self.camera_position.x + self.presentation_position_offset.x,
+            self.camera_position.y + self.presentation_position_offset.y,
+            self.camera_position.z + self.presentation_position_offset.z,
             self.camera_orientation.x,
             self.camera_orientation.y,
             self.camera_orientation.z,
@@ -498,7 +557,12 @@ impl ArTracker {
         ]
     }
 
-    /// Coarse tracking state: 0 initializing, 1 limited (orientation only), 2 tracking (6DoF).
+    /// Coarse tracking state: 0 initializing, 1 limited, 2 visual-inertial 6DoF.
+    ///
+    /// Metric scale certification is deliberately orthogonal to pose tracking:
+    /// monocular scale is unobservable at a stationary start, but withholding
+    /// otherwise healthy 6DoF (and all world content) made startup slow and
+    /// unreliable.
     pub fn tracking_state(&self) -> u8 {
         if self.orientation_samples == 0 {
             return TRACKING_STATE_INITIALIZING;
@@ -603,6 +667,26 @@ impl ArTracker {
         self.inertial_stationary_candidate
     }
 
+    /// Whether the one-time closed-form metric gauge initialization has run.
+    pub fn metric_scale_initialized(&self) -> bool {
+        self.scale_initialized
+    }
+
+    /// Latest observable closed-form correction ratio, or 1 before one exists.
+    pub fn latest_metric_scale_ratio(&self) -> f64 {
+        self.latest_scale_ratio
+    }
+
+    /// Smoothed 0..1 excitation confidence of the metric scale estimate.
+    pub fn metric_scale_confidence(&self) -> f64 {
+        self.scale_confidence
+    }
+
+    /// End cost of the latest accepted sliding-window solve.
+    pub fn latest_window_end_cost(&self) -> f64 {
+        self.latest_window_end_cost
+    }
+
     /// Assumed field of view across the longer frame axis, degrees.
     pub fn long_axis_field_of_view_degrees(&self) -> f64 {
         self.long_axis_field_of_view_degrees
@@ -654,6 +738,26 @@ impl ArTracker {
 }
 
 impl ArTracker {
+    fn decay_presentation_correction(&mut self) {
+        if self.presentation_position_offset.length_squared() < 1.0e-12 {
+            self.presentation_position_offset = DVec3::ZERO;
+            return;
+        }
+        let retention = (-self.latest_frame_delta_seconds
+            / OPTIMIZATION_CORRECTION_TIME_CONSTANT_SECONDS)
+            .exp();
+        self.presentation_position_offset *= retention;
+    }
+
+    fn publish_discontinuous_position_correction(&mut self, correction: DVec3) {
+        if correction.is_finite() {
+            // The internal map accepts the optimized state immediately. Apply
+            // the equal-and-opposite presentation offset so this frame stays
+            // continuous, then decay only that offset on later camera frames.
+            self.presentation_position_offset -= correction;
+        }
+    }
+
     fn update_camera_orientation(&mut self) {
         let (Some(reference), Some(absolute)) =
             (self.orientation_reference, self.absolute_orientation)
@@ -663,12 +767,12 @@ impl ArTracker {
         self.camera_orientation = (reference.conjugate() * absolute).normalize();
     }
 
-    fn visual_orientation_at(&self, frame_timestamp_milliseconds: f64) -> DQuat {
+    fn raw_visual_orientation_at(&self, frame_timestamp_milliseconds: f64) -> DQuat {
         let target_timestamp =
             frame_timestamp_milliseconds - self.visual_orientation_delay_milliseconds;
         let absolute = self.absolute_orientation_at(target_timestamp);
         self.orientation_reference
-            .map_or(self.camera_orientation, |reference| {
+            .map_or(DQuat::IDENTITY, |reference| {
                 (reference.conjugate() * absolute).normalize()
             })
     }
@@ -698,30 +802,43 @@ impl ArTracker {
         &self,
         raw_timestamp_milliseconds: f64,
         interval_milliseconds: f64,
-    ) -> f64 {
-        match self.regularized_motion_timestamp_milliseconds {
-            Some(previous)
-                if interval_milliseconds.is_finite()
+    ) -> Option<f64> {
+        if !raw_timestamp_milliseconds.is_finite() {
+            return None;
+        }
+        match (
+            self.last_raw_motion_timestamp_milliseconds,
+            self.regularized_motion_timestamp_milliseconds,
+        ) {
+            (None, _) => Some(raw_timestamp_milliseconds),
+            // A valid increasing event clock is the best timing evidence. Do
+            // not pull it toward the browser-reported nominal interval: real
+            // iOS delivery cadence can differ materially from `event.interval`,
+            // and doing so creates a sawtooth IMU clock relative to camera and
+            // orientation timestamps.
+            (Some(previous_raw), Some(previous_regularized))
+                if raw_timestamp_milliseconds > previous_raw =>
+            {
+                Some(raw_timestamp_milliseconds.max(previous_regularized + 0.001))
+            }
+            // Safari sometimes duplicates motion event timestamps. Advance
+            // those samples by the reported cadence so they remain usable.
+            (Some(previous_raw), Some(previous_regularized))
+                if (raw_timestamp_milliseconds - previous_raw).abs() <= 0.001
+                    && interval_milliseconds.is_finite()
                     && (1.0..=50.0).contains(&interval_milliseconds) =>
             {
-                let predicted = previous + interval_milliseconds;
-                if !raw_timestamp_milliseconds.is_finite()
-                    || raw_timestamp_milliseconds <= previous + interval_milliseconds * 0.25
-                {
-                    predicted
-                } else {
-                    let error = raw_timestamp_milliseconds - predicted;
-                    if error.abs() > interval_milliseconds * 0.75 {
-                        raw_timestamp_milliseconds.max(previous + 0.001)
-                    } else {
-                        predicted + error * 0.1
-                    }
-                }
+                Some(previous_regularized + interval_milliseconds)
             }
-            Some(previous) if raw_timestamp_milliseconds.is_finite() => {
-                raw_timestamp_milliseconds.max(previous + 0.001)
+            (Some(previous_raw), Some(previous_regularized))
+                if (raw_timestamp_milliseconds - previous_raw).abs() <= 0.001 =>
+            {
+                Some(previous_regularized + 0.001)
             }
-            _ => raw_timestamp_milliseconds,
+            // A genuinely older sample is stale. Reject it rather than
+            // manufacturing a future timestamp that can move it across a
+            // camera-frame boundary.
+            _ => None,
         }
     }
 
@@ -752,7 +869,8 @@ impl ArTracker {
             self.consecutive_stationary_frames = 0;
             // No measurement this interval; keep the preintegration time base
             // aligned with the real keyframe interval by coasting through it.
-            self.preintegration.push_gap(self.latest_frame_delta_seconds);
+            self.preintegration
+                .push_gap(self.latest_frame_delta_seconds);
             self.inertial_velocity_world_mps *=
                 (-INERTIAL_VELOCITY_DAMPING_PER_SECOND * self.latest_frame_delta_seconds).exp();
             self.camera_position +=
@@ -821,7 +939,9 @@ impl ArTracker {
         // that anchors metric scale. Hold the last world acceleration across
         // it, mirroring the pose propagation below.
         match latest_acceleration_world_raw {
-            Some(acceleration) => self.preintegration.push_hold(acceleration, remaining_seconds),
+            Some(acceleration) => self
+                .preintegration
+                .push_hold(acceleration, remaining_seconds),
             None => self.preintegration.push_gap(remaining_seconds),
         }
         position += velocity * remaining_seconds
@@ -899,16 +1019,16 @@ impl ArTracker {
         width: usize,
         height: usize,
         pixels: &[u8],
-        orientation: DQuat,
-    ) {
+        mut orientation: DQuat,
+    ) -> DQuat {
         let Ok(image_width) = u32::try_from(width) else {
-            return;
+            return orientation;
         };
         let Ok(image_height) = u32::try_from(height) else {
-            return;
+            return orientation;
         };
         let Some(image) = GrayImage::from_raw(image_width, image_height, pixels.to_vec()) else {
-            return;
+            return orientation;
         };
         let intrinsics = Intrinsics::new(width, height, self.long_axis_field_of_view_degrees);
 
@@ -924,8 +1044,8 @@ impl ArTracker {
                     // No depth yet: rotate the previous bearing at the mean
                     // scene depth (exact for pure rotation, close enough for
                     // seeding otherwise).
-                    let bearing = intrinsics
-                        .bearing(f64::from(track.pixel.0), f64::from(track.pixel.1));
+                    let bearing =
+                        intrinsics.bearing(f64::from(track.pixel.0), f64::from(track.pixel.1));
                     predicted_position + previous_orientation * (bearing * mean_depth)
                 }
             };
@@ -968,8 +1088,7 @@ impl ArTracker {
                 let Some(world) = self.map.landmark_world(landmark) else {
                     continue;
                 };
-                let camera =
-                    geometry::world_to_camera(world, self.camera_position, orientation);
+                let camera = geometry::world_to_camera(world, self.camera_position, orientation);
                 let Some((seed_x, seed_y)) = intrinsics.project(camera) else {
                     continue;
                 };
@@ -987,11 +1106,8 @@ impl ArTracker {
                     u32::try_from(newest.full_width),
                     u32::try_from(newest.full_height),
                 )
-                && let Some(reference) = GrayImage::from_raw(
-                    reference_width,
-                    reference_height,
-                    newest.full_luma.clone(),
-                )
+                && let Some(reference) =
+                    GrayImage::from_raw(reference_width, reference_height, newest.full_luma.clone())
             {
                 self.frontend.reacquire(&reference, &candidates);
             }
@@ -1015,8 +1131,7 @@ impl ArTracker {
             // photometric error) scales further — crisp tracks near 1.0,
             // marginal ones toward 0.5.
             let depth_weight = if landmark.converged() { 1.0 } else { 0.4 };
-            let flow_weight =
-                (25.0 / (10.0 + f64::from(track.smoothed_error))).clamp(0.5, 1.25);
+            let flow_weight = (25.0 / (10.0 + f64::from(track.smoothed_error))).clamp(0.5, 1.25);
             observations.push(FrameObservation {
                 landmark: landmark_id,
                 world,
@@ -1026,12 +1141,58 @@ impl ArTracker {
             });
         }
 
-        match solve_frame_pose(
-            &observations,
-            orientation,
-            self.camera_position,
-            &intrinsics,
-        ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let use_legacy_pose_solver = std::env::var_os("AR_USE_LEGACY_POSE_SOLVER").is_some();
+        #[cfg(target_arch = "wasm32")]
+        let use_legacy_pose_solver = false;
+        let solution = if use_legacy_pose_solver {
+            solve_frame_pose(
+                &observations,
+                orientation,
+                self.camera_position,
+                &intrinsics,
+            )
+        } else {
+            let pose_observations: Vec<pose_refine::PoseRefineObservation> = observations
+                .iter()
+                .map(|observation| pose_refine::PoseRefineObservation {
+                    world: observation.world,
+                    pixel_x: observation.pixel_x,
+                    pixel_y: observation.pixel_y,
+                    weight: observation.weight,
+                })
+                .collect();
+            pose_refine::refine_pose(
+                &pose_observations,
+                orientation,
+                self.camera_position,
+                intrinsics.focal,
+            )
+            .filter(|refined| {
+                refined.iterations > 0
+                    && refined.reprojection_rmse_pixels.is_finite()
+                    && refined.reprojection_rmse_pixels <= 8.0
+            })
+            .map(|refined| {
+                let outlier_landmarks = observations
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| {
+                        refined.evaluated.binary_search(index).is_ok()
+                            && refined.inliers.binary_search(index).is_err()
+                    })
+                    .map(|(_, observation)| observation.landmark)
+                    .collect();
+                FramePoseSolution {
+                    position: refined.position,
+                    orientation: refined.orientation,
+                    matches: observations.len(),
+                    inliers: refined.inliers.len(),
+                    outlier_landmarks,
+                }
+            })
+        };
+        match solution {
             Some(solution) => {
                 self.visual_matches = u32::try_from(solution.matches).unwrap_or(u32::MAX);
                 self.visual_inliers = u32::try_from(solution.inliers).unwrap_or(u32::MAX);
@@ -1041,26 +1202,24 @@ impl ArTracker {
                 // rotation artifact than real motion. Reject it outright (the
                 // previous tracker's keyframe-translation gate did the same) —
                 // a clamped version would still inject drift every frame.
-                let correction =
-                    (solution.position - self.camera_position).length();
-                let correction_bound =
-                    (1.2 * self.latest_frame_delta_seconds).clamp(0.08, 0.35);
+                let correction = (solution.position - self.camera_position).length();
+                let correction_bound = (1.2 * self.latest_frame_delta_seconds).clamp(0.08, 0.35);
                 // Strong consensus (many inliers, high inlier fraction) may
                 // override the bound: that is the recovery case where the
                 // *prediction* had drifted. The rotation artifact never has
                 // strong consensus — the misfit is not rigid.
-                let strong_consensus = solution.inliers >= 20
-                    && solution.inliers * 10 >= solution.matches * 6;
+                let strong_consensus =
+                    solution.inliers >= 20 && solution.inliers * 10 >= solution.matches * 6;
                 let accepted = solution.inliers >= MIN_VISUAL_INLIERS
                     && (correction <= correction_bound || strong_consensus);
                 if accepted {
                     self.frames_since_visual_update = 0;
+                    orientation = solution.orientation;
                     // Vertical visual corrections are the least trustworthy
                     // (depth-prior misfit projects mostly into y); apply them
                     // at half gain, as the previous tracker iteration did.
                     let mut target = solution.position;
-                    target.y = self.camera_position.y
-                        + (target.y - self.camera_position.y) * 0.5;
+                    target.y = self.camera_position.y + (target.y - self.camera_position.y) * 0.5;
                     self.accept_visual_position(target, false);
                 } else {
                     self.frames_since_visual_update =
@@ -1071,15 +1230,13 @@ impl ArTracker {
                 if accepted {
                     for landmark_id in &solution.outlier_landmarks {
                         if let Some(landmark) = self.map.landmark_mut(*landmark_id) {
-                            landmark.outlier_streak =
-                                landmark.outlier_streak.saturating_add(1);
+                            landmark.outlier_streak = landmark.outlier_streak.saturating_add(1);
                         }
                     }
                     let outliers = &solution.outlier_landmarks;
                     for observation in &observations {
                         if !outliers.contains(&observation.landmark)
-                            && let Some(landmark) =
-                                self.map.landmark_mut(observation.landmark)
+                            && let Some(landmark) = self.map.landmark_mut(observation.landmark)
                         {
                             landmark.outlier_streak = 0;
                         }
@@ -1096,8 +1253,7 @@ impl ArTracker {
             None => {
                 self.visual_matches = observations.len() as u32;
                 self.visual_inliers = 0;
-                self.frames_since_visual_update =
-                    self.frames_since_visual_update.saturating_add(1);
+                self.frames_since_visual_update = self.frames_since_visual_update.saturating_add(1);
             }
         }
         // During a prolonged visual outage, dead-reckoning velocity is more
@@ -1112,7 +1268,9 @@ impl ArTracker {
         // tracking.
         if self.relocalization_enabled
             && self.frames_since_visual_update > 2
-            && self.frame_count.is_multiple_of(RELOCALIZATION_INTERVAL_FRAMES)
+            && self
+                .frame_count
+                .is_multiple_of(RELOCALIZATION_INTERVAL_FRAMES)
             && self.relocalization_ready(frame_id)
         {
             self.attempt_relocalization(frame_id, width, height, pixels, orientation);
@@ -1121,52 +1279,145 @@ impl ArTracker {
         // 4. Keyframe policy.
         if self.should_create_keyframe() {
             self.create_keyframe(width, height, pixels, orientation, &intrinsics);
+            let keyframe_snapshot: Vec<(u32, DVec3, DVec3)> = self
+                .map
+                .keyframes
+                .iter()
+                .map(|keyframe| (keyframe.id, keyframe.position, keyframe.velocity))
+                .collect();
+            let landmark_snapshot: Vec<(u32, f64)> = self
+                .map
+                .landmarks
+                .iter()
+                .map(|landmark| (landmark.id, landmark.inverse_depth))
+                .collect();
             let report = solve_window(&mut self.map, &intrinsics);
             if let Some(report) = report {
-                self.latest_window_end_cost = report.end_cost;
-                // The newest keyframe was created at the current camera
-                // position; carry any BA correction of it into the live pose.
-                if let Some(newest) = self.map.keyframes.last() {
-                    let correction = newest.position - self.camera_position;
-                    if correction.is_finite() && correction.length() < 0.5 {
+                let correction = self
+                    .map
+                    .keyframes
+                    .last()
+                    .map(|newest| newest.position - self.camera_position);
+                #[cfg(not(target_arch = "wasm32"))]
+                let maximum_correction = std::env::var("AR_MAX_BA_CORRECTION_METRES")
+                    .ok()
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .filter(|value| value.is_finite() && (0.02..=1.0).contains(value))
+                    .unwrap_or(0.25);
+                #[cfg(target_arch = "wasm32")]
+                let maximum_correction = 0.25;
+                let accepted = report.end_cost.is_finite()
+                    && report.start_cost.is_finite()
+                    && report.end_cost <= report.start_cost * 1.001
+                    && correction.is_some_and(|value| {
+                        value.is_finite() && value.length() <= maximum_correction
+                    });
+                if accepted {
+                    self.latest_window_end_cost = report.end_cost;
+                    // Carry the optimized newest-keyframe correction into the
+                    // internal state immediately, but ease only this
+                    // discontinuity into the published pose.
+                    if let Some(correction) = correction {
                         self.camera_position += correction;
+                        self.publish_discontinuous_position_correction(correction);
+                    }
+                } else {
+                    // A solver candidate is speculative until its objective
+                    // improves without teleporting the newest state. Restore
+                    // every optimized variable atomically on rejection.
+                    for (id, position, velocity) in keyframe_snapshot {
+                        if let Some(keyframe) = self
+                            .map
+                            .keyframes
+                            .iter_mut()
+                            .find(|keyframe| keyframe.id == id)
+                        {
+                            keyframe.position = position;
+                            keyframe.velocity = velocity;
+                        }
+                    }
+                    for (id, inverse_depth) in landmark_snapshot {
+                        if let Some(landmark) = self.map.landmark_mut(id) {
+                            landmark.inverse_depth = inverse_depth;
+                        }
                     }
                 }
             }
+            self.refresh_scale_history();
             self.update_metric_scale();
+        }
+        orientation
+    }
+
+    fn refresh_scale_history(&mut self) {
+        for keyframe in &self.map.keyframes {
+            let frame = scale::ScaleFrame {
+                id: keyframe.id,
+                position: keyframe.position,
+                preintegration: keyframe.preintegration,
+            };
+            if let Some(existing) = self
+                .scale_history
+                .iter_mut()
+                .find(|existing| existing.id == frame.id)
+            {
+                *existing = frame;
+            } else {
+                self.scale_history.push_back(frame);
+            }
+        }
+        while self.scale_history.len() > SCALE_HISTORY_CAPACITY {
+            self.scale_history.pop_front();
         }
     }
 
-    /// Metric-scale maintenance, run at keyframe rate. The closed-form
-    /// estimator ([`scale`]) is only observable under acceleration excitation;
-    /// the first confident estimate is applied in full (initialization), later
-    /// ones as small bounded steps so the world never visibly breathes.
+    /// Metric-scale diagnostics, run at keyframe rate. The closed-form
+    /// estimator ([`scale`]) is only observable under acceleration excitation.
+    /// Production never applies it to a visible world: the recordings show
+    /// that a late one-shot rebase is inconsistent and causes exactly the
+    /// apparent size jump this tracker must avoid. Native replay can opt into
+    /// the old behavior explicitly for controlled ablations.
     fn update_metric_scale(&mut self) {
-        let estimate = scale::estimate_scale(&self.map);
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::env::var_os("AR_DISABLE_SCALE").is_some() {
+            return;
+        }
+        let history: Vec<scale::ScaleFrame> = self.scale_history.iter().copied().collect();
+        let estimate = scale::estimate_scale_frames(&history);
         #[cfg(not(target_arch = "wasm32"))]
         if std::env::var_os("AR_DEBUG_SCALE").is_some() {
             match &estimate {
                 Some(estimate) => eprintln!(
-                    "scale-debug ratio={:.3} excitation={:.2} pairs={} initialized={}",
-                    estimate.ratio, estimate.excitation, estimate.pairs, self.scale_initialized
+                    "scale-debug ratio={:.3} excitation={:.2} correlation={:.3} pairs={} initialized={}",
+                    estimate.ratio,
+                    estimate.excitation,
+                    estimate.correlation,
+                    estimate.pairs,
+                    self.scale_initialized
                 ),
-                None => eprintln!("scale-debug unobservable (kf={})", self.map.keyframes.len()),
+                None => eprintln!(
+                    "scale-debug unobservable (map_kf={} scale_kf={})",
+                    self.map.keyframes.len(),
+                    self.scale_history.len()
+                ),
             }
         }
         let Some(estimate) = estimate else {
             return;
         };
         self.latest_scale_ratio = estimate.ratio;
-        let confidence = (estimate.excitation / 2.0).clamp(0.0, 1.0);
+        let excitation_confidence = (estimate.excitation / 2.0).clamp(0.0, 1.0);
+        let shape_confidence = ((estimate.correlation - 0.6) / 0.4).clamp(0.0, 1.0);
+        let confidence = excitation_confidence * shape_confidence;
         self.scale_confidence = self.scale_confidence * 0.9 + confidence * 0.1;
-        // One-time bootstrap only. The gauge lives inside the bundle
-        // adjustment (preintegration factors anchor it continuously once
-        // depth priors release on convergence); post-hoc rescaling events were
-        // user-visible as the world flipping size, and a "lock" could not
-        // actually pin a gauge that BA keeps evolving. The closed-form
-        // estimate's only job is to put the bootstrap map near metric before
-        // the session gets going.
-        if !self.scale_initialized && confidence >= 0.4 {
+        // The ratio remains diagnostic in production. A native-only opt-in
+        // retains the previous one-time bootstrap for reproducible ablations;
+        // it must never be enabled while visible anchors exist.
+        #[cfg(not(target_arch = "wasm32"))]
+        let apply_experimental_scale = std::env::var_os("AR_APPLY_EXPERIMENTAL_SCALE").is_some();
+        #[cfg(target_arch = "wasm32")]
+        let apply_experimental_scale = false;
+        if apply_experimental_scale && !self.scale_initialized && confidence >= 0.4 {
             self.recent_scale_ratios.push(estimate.ratio);
             if self.recent_scale_ratios.len() > 5 {
                 self.recent_scale_ratios.remove(0);
@@ -1187,14 +1438,21 @@ impl ArTracker {
         }
     }
 
-    /// Rescales the entire metric state by `ratio` about the current camera
-    /// position (so the on-screen view does not jump): keyframe positions and
-    /// velocities, landmark depths, and the inertial velocity.
+    /// Native-replay ablation: rescales the complete state by `ratio` about the
+    /// session origin. Production WASM cannot call this path.
     fn apply_map_scale(&mut self, ratio: f64) {
         if !ratio.is_finite() || ratio <= 0.0 || (ratio - 1.0).abs() < 1.0e-6 {
             return;
         }
-        let pivot = self.camera_position;
+        #[cfg(not(target_arch = "wasm32"))]
+        let scale_about_origin = std::env::var_os("AR_SCALE_ABOUT_CURRENT_CAMERA").is_none();
+        #[cfg(target_arch = "wasm32")]
+        let scale_about_origin = true;
+        let pivot = if scale_about_origin {
+            DVec3::new(0.0, CAMERA_HEIGHT_METRES, 0.0)
+        } else {
+            self.camera_position
+        };
         for keyframe in &mut self.map.keyframes {
             keyframe.position = pivot + (keyframe.position - pivot) * ratio;
             keyframe.velocity *= ratio;
@@ -1203,7 +1461,13 @@ impl ArTracker {
             landmark.inverse_depth = (landmark.inverse_depth / ratio)
                 .clamp(map::MIN_INVERSE_DEPTH, map::MAX_INVERSE_DEPTH);
         }
+        for frame in &mut self.scale_history {
+            frame.position = pivot + (frame.position - pivot) * ratio;
+        }
         self.inertial_velocity_world_mps *= ratio;
+        if scale_about_origin {
+            self.camera_position = pivot + (self.camera_position - pivot) * ratio;
+        }
         self.position_before_inertial_prediction =
             pivot + (self.position_before_inertial_prediction - pivot) * ratio;
         self.clear_pending_appearance();
@@ -1212,7 +1476,8 @@ impl ArTracker {
     fn should_create_keyframe(&self) -> bool {
         if self.map.keyframes.is_empty() {
             // Bootstrap as soon as the front-end has anything to anchor.
-            return self.frontend.tracks.len() >= MIN_VISUAL_INLIERS && self.orientation_samples > 0;
+            return self.frontend.tracks.len() >= MIN_VISUAL_INLIERS
+                && self.orientation_samples > 0;
         }
         if self.frame_count - self.last_keyframe_frame_count < KEYFRAME_MIN_FRAME_GAP {
             return false;
@@ -1259,11 +1524,9 @@ impl ArTracker {
         }
         flows.sort_by(f64::total_cmp);
         let median = flows[flows.len() / 2];
-        let width = self
-            .map
-            .keyframes
-            .last()
-            .map_or(240.0, |keyframe| (keyframe.luma_width * RELOC_LUMA_DOWNSAMPLE) as f64);
+        let width = self.map.keyframes.last().map_or(240.0, |keyframe| {
+            (keyframe.luma_width * RELOC_LUMA_DOWNSAMPLE) as f64
+        });
         median >= width * KEYFRAME_FLOW_FRACTION
     }
 
@@ -1311,6 +1574,19 @@ impl ArTracker {
             full_width: width,
             full_height: height,
         });
+        // Map capacity eviction removes every landmark anchored by the oldest
+        // keyframe. Unbind any live front-end tracks that still carry those
+        // now-stale ids before counting/recording observations; otherwise the
+        // tracker believes it has a healthy anchored set while pose solving
+        // silently skips every one of them.
+        let stale_landmarks: Vec<u32> = self
+            .frontend
+            .tracks
+            .iter()
+            .filter_map(|track| track.landmark)
+            .filter(|landmark| self.map.landmark(*landmark).is_none())
+            .collect();
+        self.frontend.drop_landmarks(&stale_landmarks);
 
         // Anchor mature unanchored tracks as new landmarks; record
         // observations for already-anchored tracks.
@@ -1327,8 +1603,7 @@ impl ArTracker {
                     landmark_updates.push((landmark_id, pixel));
                 }
                 None if track.age >= minimum_track_age => {
-                    let bearing =
-                        intrinsics.bearing(f64::from(pixel.0), f64::from(pixel.1));
+                    let bearing = intrinsics.bearing(f64::from(pixel.0), f64::from(pixel.1));
                     let landmark_id = self.map.create_landmark(keyframe_id, bearing);
                     track.landmark = Some(landmark_id);
                     track.state = TrackState::Anchored;
@@ -1340,10 +1615,9 @@ impl ArTracker {
                 None => {}
             }
         }
-        let observer_position = self.camera_position;
         for (landmark_id, pixel) in landmark_updates {
             self.map
-                .record_observation(landmark_id, observer_position, intrinsics, pixel);
+                .record_observation(landmark_id, orientation, intrinsics, pixel);
         }
         if let Some(keyframe) = self.map.keyframes.last_mut() {
             keyframe.observations = observations;
@@ -1372,10 +1646,9 @@ impl ArTracker {
         pixels: &[u8],
         orientation: DQuat,
     ) {
-        if self
-            .pending_appearance_frame_id
-            .is_some_and(|previous| frame_id.abs_diff(previous) > 2 * RELOCALIZATION_INTERVAL_FRAMES as u32)
-        {
+        if self.pending_appearance_frame_id.is_some_and(|previous| {
+            frame_id.abs_diff(previous) > 2 * RELOCALIZATION_INTERVAL_FRAMES as u32
+        }) {
             self.clear_pending_appearance();
         }
         let (current_luma, current_width, current_height) =
@@ -1433,7 +1706,9 @@ impl ArTracker {
             return;
         }
         self.clear_pending_appearance();
+        let previous_position = self.camera_position;
         self.accept_visual_position(matched_position, true);
+        self.publish_discontinuous_position_correction(self.camera_position - previous_position);
         self.visual_matches = u32::try_from(matched.matches).unwrap_or(u32::MAX);
         self.visual_inliers = u32::try_from(matched.inliers).unwrap_or(u32::MAX);
         self.visual_relocalization_count = self.visual_relocalization_count.saturating_add(1);

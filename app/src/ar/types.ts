@@ -47,9 +47,10 @@ export interface TrackerDebugSettings {
 }
 
 /**
- * Mirrors the wasm tracker defaults (68 degree long-axis field of view, 40 ms
- * visual orientation delay, 130 feature budget) so the debug panel starts in
- * sync with the tracker without needing wasm getters for every value.
+ * Starts with the browser/native bridge calibration used by the live app.
+ * The tracker itself defaults to zero orientation delay for already
+ * synchronized raw replay; live acquisition can add bridge-specific delay
+ * explicitly here.
  */
 export function defaultTrackerDebugSettings(): TrackerDebugSettings {
   return {
@@ -59,7 +60,10 @@ export function defaultTrackerDebugSettings(): TrackerDebugSettings {
     nativeBackdropEnabled: true,
     pointOverlayEnabled: import.meta.env.DEV,
     relocalizationEnabled: true,
-    renderSmoothingEnabled: true,
+    // The Rust tracker eases in optimization corrections without lagging
+    // genuine camera motion. Whole-pose renderer smoothing remains available
+    // as a diagnostic override, but is intentionally off by default.
+    renderSmoothingEnabled: false,
     trackerFrameWidth: 240,
     visualOrientationDelayMilliseconds: 40,
   };

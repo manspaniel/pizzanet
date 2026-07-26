@@ -6,11 +6,12 @@
 //  1. Ground truth: per-frame ARKit camera poses -> arkit-poses.ndjson
 //  2. A pizzanet web-format tracking recording (manifest + sensor-events
 //     + tracker-frames + tracker-luma.gray), with camera luma taken from the
-//     same ARKit frames and Safari-convention sensor events synthesized from
-//     CoreMotion.
+//     same ARKit frames and sensor-events copied verbatim from the actual
+//     WKWebView Device Motion / Device Orientation callbacks.
 //
-//  Both streams share the boot-time clock (ARFrame.timestamp and
-//  CMDeviceMotion.timestamp use it), so they are inherently synchronized.
+//  Native CoreMotion remains a separate diagnostic sidecar. WK frame timing
+//  records preserve the page-clock mapping used by the live tracker, so replay
+//  does not confuse bridge receipt jitter with capture time.
 //
 //  Concurrency: `RecordingCore` is explicitly nonisolated (the project uses
 //  default main-actor isolation) and guards all recording state with a lock —
@@ -38,6 +39,7 @@ final class RecordingSession: ObservableObject {
     @Published var frameCount = 0
     @Published var sensorEventCount = 0
     @Published var arkitTrackingState = "—"
+    @Published var browserSensorsReady = false
 
     let core: RecordingCore
 
@@ -50,6 +52,9 @@ final class RecordingSession: ObservableObject {
                 if let frames = update.frameCount { self.frameCount = frames }
                 if let sensors = update.sensorEventCount { self.sensorEventCount = sensors }
                 if let tracking = update.trackingState { self.arkitTrackingState = tracking }
+                if let ready = update.browserSensorsReady {
+                    self.browserSensorsReady = ready
+                }
             }
         }
     }
@@ -74,12 +79,17 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         var frameCount: Int?
         var sensorEventCount: Int?
         var trackingState: String?
+        var browserSensorsReady: Bool?
     }
 
     var onUpdate: (@Sendable (Update) -> Void)?
     /// Fed every throttled frame (recording or not) for the webview bridge:
-    /// (frameId, timestampMilliseconds, width, height, base64Luma).
-    var onLumaFrame: (@Sendable (UInt32, Double, Int, Int, String) -> Void)?
+    /// (frameId, timestampMilliseconds, width, height, base64Luma,
+    /// longAxisFovDegrees). Keeping luma as argument five preserves
+    /// compatibility with a host page that has not deployed the FOV extension.
+    var onLumaFrame: (@Sendable (UInt32, Double, Int, Int, String, Double) -> Void)?
+    /// Enables the page-to-native raw capture bridge only while recording.
+    var onBrowserCaptureRecordingState: (@Sendable (Bool) -> Void)?
 
     private let motionManager = CMMotionManager()
     private let motionQueue = OperationQueue()
@@ -92,6 +102,10 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
     private var nextFrameAtSeconds: TimeInterval = 0
     private var trackerFrameHeight = 0
     private var sensorEventLines: [String] = []
+    private var browserSensorEventLines: [String] = []
+    private var browserFrameTimingLines: [String] = []
+    private var browserMotionEventCount = 0
+    private var browserOrientationEventCount = 0
     private var frameEventLines: [String] = []
     private var arkitPoseLines: [String] = []
     private var lumaFileHandle: FileHandle?
@@ -101,23 +115,38 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
     private var cameraFocalPixels: Double = 0
     private var cameraImageWidth = 0
     private var cameraImageHeight = 0
+    private var previousMotionTimestampSeconds: TimeInterval?
+    private var browserSensorsReady = false
 
     // MARK: - Controls
 
     func start() {
         lock.lock()
-        defer { lock.unlock() }
-        guard !isRecording else { return }
+        guard !isRecording else {
+            lock.unlock()
+            return
+        }
+        guard browserSensorsReady else {
+            lock.unlock()
+            onUpdate?(Update(phase: .failed("Start AR and allow WK motion sensors first.")))
+            return
+        }
 
         sensorEventLines = []
+        browserSensorEventLines = []
+        browserFrameTimingLines = []
+        browserMotionEventCount = 0
+        browserOrientationEventCount = 0
         frameEventLines = []
         arkitPoseLines = []
         recordedFrameCount = 0
-        nextFrameId = 1
         trackerFrameHeight = 0
         startUptimeSeconds = ProcessInfo.processInfo.systemUptime
         startWallClock = Date()
-        nextFrameAtSeconds = 0
+        // Reject any ARFrame captured before the Record tap but still queued
+        // for delegate delivery.
+        nextFrameAtSeconds = startUptimeSeconds
+        previousMotionTimestampSeconds = nil
 
         let lumaURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("tracker-luma-\(UUID().uuidString).gray")
@@ -136,6 +165,8 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         }
 
         isRecording = true
+        lock.unlock()
+        onBrowserCaptureRecordingState?(true)
         onUpdate?(Update(phase: .recording, frameCount: 0, sensorEventCount: 0))
     }
 
@@ -151,16 +182,35 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         lumaFileHandle = nil
         let durationMilliseconds =
             (ProcessInfo.processInfo.systemUptime - startUptimeSeconds) * 1000.0
-        let sensorEvents = sensorEventLines.joined(separator: "\n")
+        let sensorEvents = browserSensorEventLines.joined(separator: "\n")
+        let coreMotionEvents = sensorEventLines.joined(separator: "\n")
+        let browserFrameTiming = browserFrameTimingLines.joined(separator: "\n")
         let frameEvents = frameEventLines.joined(separator: "\n")
         let arkitPoses = arkitPoseLines.joined(separator: "\n")
         let manifest = buildManifestLocked(durationMilliseconds: durationMilliseconds)
         let lumaURL = lumaFileURL
         let frames = recordedFrameCount
+        let browserSensors = browserSensorEventLines.count
+        let browserMotionEvents = browserMotionEventCount
+        let browserOrientationEvents = browserOrientationEventCount
         lock.unlock()
+        onBrowserCaptureRecordingState?(false)
 
-        guard frames > 10, let lumaURL else {
-            onUpdate?(Update(phase: .failed("Recording too short.")))
+        guard
+            frames > 10,
+            browserMotionEvents > 5,
+            browserOrientationEvents > 5,
+            let lumaURL
+        else {
+            onUpdate?(
+                Update(
+                    phase: .failed(
+                        browserSensors == 0
+                            ? "No WKWebView sensor events were captured."
+                            : "Recording too short."
+                    )
+                )
+            )
             return
         }
         onUpdate?(Update(phase: .uploading))
@@ -172,6 +222,8 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
                     sensorEvents: sensorEvents,
                     frameEvents: frameEvents,
                     arkitPoses: arkitPoses,
+                    coreMotionEvents: coreMotionEvents,
+                    browserFrameTiming: browserFrameTiming,
                     lumaFileURL: lumaURL
                 )
                 update?(Update(phase: .done))
@@ -199,32 +251,65 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         }
         nextFrameAtSeconds =
             max(nextFrameAtSeconds + Self.targetFrameIntervalSeconds, frame.timestamp - 0.005)
+        let feedFrameId = nextFrameId
+        // The WK tracker remains alive across Record taps, so bridge ids must
+        // remain globally monotonic even while the native recorder is idle.
+        nextFrameId += 1
+        lock.unlock()
 
-        let recordingTimeMilliseconds = (frame.timestamp - startUptimeSeconds) * 1000.0
         let eventTimestampMilliseconds = frame.timestamp * 1000.0
+        let intrinsics = frame.camera.intrinsics
+        let focalPixels = Double(intrinsics.columns.0.x)
+        let focalYPixels = Double(intrinsics.columns.1.y)
+        let principalPointXPixels = Double(intrinsics.columns.2.x)
+        let principalPointYPixels = Double(intrinsics.columns.2.y)
+        let imageWidth = Int(frame.camera.imageResolution.width)
+        let imageHeight = Int(frame.camera.imageResolution.height)
+        let longAxisFovDegrees = 2.0
+            * atan(Double(max(imageWidth, imageHeight)) / (2.0 * focalPixels))
+            * 180.0 / Double.pi
 
         guard let (luma, width, height) = RecordingCore.portraitLuma(
             from: frame.capturedImage,
             targetWidth: Self.trackerFrameWidth
         ) else {
-            lock.unlock()
+            onUpdate?(Update(trackingState: trackingLabel))
             return
         }
-        let feedFrameId = nextFrameId
+        lock.lock()
         guard isRecording else {
             lock.unlock()
             onLumaFrame?(
                 feedFrameId, eventTimestampMilliseconds, width, height,
-                luma.base64EncodedString()
+                luma.base64EncodedString(),
+                longAxisFovDegrees
             )
             onUpdate?(Update(trackingState: trackingLabel))
             return
         }
+        // A Record tap can race with luma conversion, which deliberately runs
+        // outside the shared lock. Reject that pre-tap capture after
+        // reacquiring the recording state.
+        guard frame.timestamp >= startUptimeSeconds else {
+            lock.unlock()
+            onLumaFrame?(
+                feedFrameId, eventTimestampMilliseconds, width, height,
+                luma.base64EncodedString(),
+                longAxisFovDegrees
+            )
+            onUpdate?(Update(trackingState: trackingLabel))
+            return
+        }
+        let recordingTimeMilliseconds = (frame.timestamp - startUptimeSeconds) * 1000.0
+        // Keep every post-tap frame. Exact WK frame timing may start a few
+        // milliseconds later; replay skips frames before its first complete
+        // browser sensor pair instead of making camera capture depend on the
+        // separate CoreMotion diagnostic stream.
         if trackerFrameHeight == 0 {
             trackerFrameHeight = height
-            cameraFocalPixels = Double(frame.camera.intrinsics.columns.0.x)
-            cameraImageWidth = Int(frame.camera.imageResolution.width)
-            cameraImageHeight = Int(frame.camera.imageResolution.height)
+            cameraFocalPixels = focalPixels
+            cameraImageWidth = imageWidth
+            cameraImageHeight = imageHeight
         }
         guard height == trackerFrameHeight else {
             lock.unlock()
@@ -232,8 +317,7 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         }
 
         lumaFileHandle?.write(luma)
-        let frameId = nextFrameId
-        nextFrameId += 1
+        let frameId = feedFrameId
         recordedFrameCount += 1
         let frames = recordedFrameCount
 
@@ -244,6 +328,17 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
                 "recordingTimeMilliseconds": recordingTimeMilliseconds,
                 "frameWidth": width,
                 "frameHeight": height,
+                // Preserve exact per-frame calibration for future replay
+                // models. The current tracker consumes the manifest-level
+                // long-axis FOV because its landmark bearings share one
+                // global intrinsics object.
+                "cameraFocalXPixels": focalPixels,
+                "cameraFocalYPixels": focalYPixels,
+                "cameraPrincipalPointXPixels": principalPointXPixels,
+                "cameraPrincipalPointYPixels": principalPointYPixels,
+                "cameraImageWidth": imageWidth,
+                "cameraImageHeight": imageHeight,
+                "longAxisFieldOfViewDegrees": longAxisFovDegrees,
             ])
         )
 
@@ -269,13 +364,14 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
 
         onLumaFrame?(
             frameId, eventTimestampMilliseconds, width, height,
-            luma.base64EncodedString()
+            luma.base64EncodedString(),
+            longAxisFovDegrees
         )
         onUpdate?(Update(frameCount: frames, trackingState: trackingLabel))
     }
 
     /// Extracts the Y (luma) plane, rotates landscape -> portrait (90° CW),
-    /// and box-downsamples to `targetWidth` columns.
+    /// and area-downsamples to `targetWidth` columns.
     private static func portraitLuma(
         from pixelBuffer: CVPixelBuffer,
         targetWidth: Int
@@ -298,33 +394,118 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         out.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) in
             let dest = buffer.bindMemory(to: UInt8.self).baseAddress!
             for destY in 0..<destHeight {
-                let sourceX = min(
-                    sourceWidth - 1,
-                    Int(Double(destY) / Double(destHeight) * Double(sourceWidth))
+                // A portrait row covers a horizontal interval in the
+                // landscape source. Average the entire footprint rather than
+                // a 2x2 patch at one sample location; the reduction is about
+                // 4.5x per axis, so the old sampler aliased roof edges and
+                // texture into unstable LK features.
+                let sourceXStart = destY * sourceWidth / destHeight
+                let sourceXEnd = min(
+                    sourceWidth,
+                    ((destY + 1) * sourceWidth + destHeight - 1) / destHeight
                 )
                 for destX in 0..<destWidth {
-                    // 90° clockwise: portrait column samples the sensor's y
-                    // axis, reversed.
-                    let sourceY = min(
-                        sourceHeight - 1,
-                        sourceHeight - 1
-                            - Int(Double(destX) / Double(destWidth) * Double(sourceHeight))
+                    // 90° clockwise: portrait columns traverse source rows in
+                    // reverse. These are half-open source bounds.
+                    let sourceYStart = max(
+                        0,
+                        sourceHeight
+                            - ((destX + 1) * sourceHeight + destWidth - 1) / destWidth
                     )
-                    let x1 = min(sourceX + 1, sourceWidth - 1)
-                    let y1 = min(sourceY + 1, sourceHeight - 1)
-                    let sum =
-                        Int(source[sourceY * stride + sourceX])
-                        + Int(source[sourceY * stride + x1])
-                        + Int(source[y1 * stride + sourceX])
-                        + Int(source[y1 * stride + x1])
-                    dest[destY * destWidth + destX] = UInt8(sum / 4)
+                    let sourceYEnd = min(
+                        sourceHeight,
+                        sourceHeight - destX * sourceHeight / destWidth
+                    )
+                    var sum = 0
+                    var samples = 0
+                    for sourceY in sourceYStart..<sourceYEnd {
+                        let row = sourceY * stride
+                        for sourceX in sourceXStart..<sourceXEnd {
+                            sum += Int(source[row + sourceX])
+                            samples += 1
+                        }
+                    }
+                    dest[destY * destWidth + destX] =
+                        samples > 0 ? UInt8(sum / samples) : 0
                 }
             }
         }
         return (out, destWidth, destHeight)
     }
 
-    // MARK: - CoreMotion -> Safari-convention sensor events
+    // MARK: - Exact WKWebView inputs
+
+    /// Receives low-rate readiness messages and 40 ms batches containing the
+    /// untouched values seen by the page's actual event handlers.
+    func appendBrowserCaptureMessage(_ body: Any) {
+        guard
+            let envelope = body as? [String: Any],
+            let kind = envelope["kind"] as? String
+        else {
+            return
+        }
+
+        if kind == "sensor_readiness" {
+            let permissionGranted = envelope["permissionState"] as? String == "granted"
+            let motionReceived = envelope["motionEventReceived"] as? Bool == true
+            let orientationReceived = envelope["orientationEventReceived"] as? Bool == true
+            let ready = permissionGranted && motionReceived && orientationReceived
+            lock.lock()
+            browserSensorsReady = ready
+            lock.unlock()
+            onUpdate?(Update(browserSensorsReady: ready))
+            return
+        }
+
+        guard
+            kind == "raw_input_batch",
+            let events = envelope["events"] as? [Any]
+        else {
+            return
+        }
+        let nativeReceiptUptimeMilliseconds =
+            ProcessInfo.processInfo.systemUptime * 1000.0
+        let performanceTimeOriginMilliseconds =
+            envelope["performanceTimeOriginMilliseconds"] as? Double
+
+        lock.lock()
+        guard isRecording else {
+            lock.unlock()
+            return
+        }
+        let recordingTimeMilliseconds =
+            nativeReceiptUptimeMilliseconds - startUptimeSeconds * 1000.0
+        for rawEvent in events {
+            guard let eventValue = rawEvent as? [String: Any] else { continue }
+            guard let eventKind = eventValue["kind"] as? String else { continue }
+            var event = eventValue
+            event["nativeMessageReceiptUptimeMilliseconds"] =
+                nativeReceiptUptimeMilliseconds
+            event["recordingTimeMilliseconds"] = recordingTimeMilliseconds
+            if let performanceTimeOriginMilliseconds {
+                event["performanceTimeOriginMilliseconds"] =
+                    performanceTimeOriginMilliseconds
+            }
+            guard JSONSerialization.isValidJSONObject(event) else { continue }
+            switch eventKind {
+            case "device_motion":
+                browserSensorEventLines.append(jsonLine(event))
+                browserMotionEventCount += 1
+            case "device_orientation":
+                browserSensorEventLines.append(jsonLine(event))
+                browserOrientationEventCount += 1
+            case "native_frame_timing":
+                browserFrameTimingLines.append(jsonLine(event))
+            default:
+                continue
+            }
+        }
+        let count = browserSensorEventLines.count
+        lock.unlock()
+        onUpdate?(Update(sensorEventCount: count))
+    }
+
+    // MARK: - Native CoreMotion diagnostics
 
     private func appendMotion(_ motion: CMDeviceMotion) {
         let gravityConstant = 9.80665
@@ -337,6 +518,13 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
             return
         }
         let recordingTimeMilliseconds = (motion.timestamp - startUptimeSeconds) * 1000.0
+        let measuredIntervalSeconds = previousMotionTimestampSeconds
+            .map { motion.timestamp - $0 }
+            .flatMap { interval in
+                interval.isFinite && interval > 0 && interval <= 0.1 ? interval : nil
+            }
+            ?? motionManager.deviceMotionUpdateInterval
+        previousMotionTimestampSeconds = motion.timestamp
 
         // Safari-convention values, verified empirically against ARKit ground
         // truth (integrated dv correlates 0.98 with ARKit velocity):
@@ -369,8 +557,8 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
                     "beta": motion.rotationRate.y * degreesPerRadian,
                     "gamma": motion.rotationRate.z * degreesPerRadian,
                 ],
-                "intervalMilliseconds": 1000.0 / 60.0,
-                "reportedInterval": 1.0 / 60.0,
+                "intervalMilliseconds": measuredIntervalSeconds * 1000.0,
+                "reportedInterval": measuredIntervalSeconds,
                 "screenAngleDegrees": 0,
                 "screenOrientation": "portrait-primary",
             ])
@@ -401,9 +589,7 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
                 "screenOrientation": "portrait-primary",
             ])
         )
-        let count = sensorEventLines.count
         lock.unlock()
-        onUpdate?(Update(sensorEventCount: count))
     }
 
     // MARK: - Manifest + upload
@@ -425,6 +611,8 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
                 from: startWallClock.addingTimeInterval(durationMilliseconds / 1000.0)
             ),
             "durationMilliseconds": durationMilliseconds,
+            "startedAtNativeUptimeMilliseconds": startUptimeSeconds * 1000.0,
+            // Retained for schema-v2 readers of older native bundles.
             "startedAtPerformanceMilliseconds": startUptimeSeconds * 1000.0,
             "camera": [
                 "trackerFrameWidth": Self.trackerFrameWidth,
@@ -441,19 +629,29 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
                 "imageHeight": cameraImageHeight,
             ],
             "clock": [
-                "eventTimestampBasis": "boottimeMilliseconds",
-                "receiptTimestampBasis": "boottimeMilliseconds",
+                "sensorEventTimestampBasis": "wkwebviewPerformanceMilliseconds",
+                "sensorReceiptTimestampBasis": "wkwebviewPerformanceMilliseconds",
+                "frameNativeTimestampBasis": "boottimeMilliseconds",
+                "frameReplayTimestampBasis": "wkwebviewPerformanceMilliseconds",
+                "nativeMessageReceiptBasis": "boottimeMilliseconds",
             ],
             "counts": [
-                "sensorEvents": sensorEventLines.count,
+                "sensorEvents": browserSensorEventLines.count,
+                "browserMotionEvents": browserMotionEventCount,
+                "browserOrientationEvents": browserOrientationEventCount,
+                "coreMotionEvents": sensorEventLines.count,
+                "browserFrameTimingEvents": browserFrameTimingLines.count,
                 "trackerFrames": recordedFrameCount,
             ],
             "device": [
                 "platform": "iPhone",
                 "userAgent": "ARTest2 native ARKit recorder",
             ],
+            "sensorSource": "wkwebview-device-events",
             "files": [
                 "sensorEvents": "sensor-events.ndjson",
+                "coreMotionEvents": "coremotion-events.ndjson",
+                "browserFrameTiming": "wk-frame-timing.ndjson",
                 "frameEvents": "tracker-frames.ndjson",
                 "trackerLuma": "tracker-luma.gray",
                 "arkitPoses": "arkit-poses.ndjson",
@@ -468,6 +666,8 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         sensorEvents: String,
         frameEvents: String,
         arkitPoses: String,
+        coreMotionEvents: String,
+        browserFrameTiming: String,
         lumaFileURL: URL
     ) async throws {
         let boundary = "pizzanet-\(UUID().uuidString)"
@@ -484,6 +684,8 @@ nonisolated final class RecordingCore: NSObject, ARSessionDelegate, @unchecked S
         addField("sensorEvents", sensorEvents)
         addField("frameEvents", frameEvents)
         addField("arkitPoses", arkitPoses)
+        addField("coreMotionEvents", coreMotionEvents)
+        addField("browserFrameTiming", browserFrameTiming)
         let luma = try Data(contentsOf: lumaFileURL)
         body.append(Data("--\(boundary)\r\n".utf8))
         body.append(

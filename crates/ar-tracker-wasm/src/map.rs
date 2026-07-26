@@ -23,7 +23,8 @@ pub const CONVERGED_PARALLAX_DEGREES: f64 = 1.5;
 /// Bundle-adjustment window size in keyframes.
 pub const WINDOW_KEYFRAMES: usize = 6;
 /// Total retained keyframes (older ones serve relocalization and as frozen
-/// landmark anchors). Bounded by stored keyframe imagery memory.
+/// landmark anchors). Metric-scale calibration keeps a separate lightweight
+/// history, so this image-heavy map can stay bounded.
 pub const MAX_KEYFRAMES: usize = 24;
 
 /// World-frame accelerometer preintegration between two consecutive keyframes:
@@ -168,17 +169,8 @@ impl Map {
 
         if self.keyframes.len() > MAX_KEYFRAMES {
             let evicted = self.keyframes.remove(0);
-            let anchor_gone: Vec<u32> = self
-                .landmarks
-                .iter()
-                .filter(|landmark| landmark.anchor == evicted.id)
-                .map(|landmark| landmark.id)
-                .collect();
             self.landmarks
                 .retain(|landmark| landmark.anchor != evicted.id);
-            // Also drop the evicted keyframe's observations of surviving
-            // landmarks — they refer to a pose that no longer exists.
-            let _ = anchor_gone;
         }
         id
     }
@@ -209,27 +201,26 @@ impl Map {
     pub fn record_observation(
         &mut self,
         landmark_id: u32,
-        observer_position: DVec3,
+        observer_orientation: DQuat,
         intrinsics: &Intrinsics,
         pixel: (f32, f32),
     ) {
-        let Some(world) = self
-            .landmark(landmark_id)
-            .and_then(|landmark| self.landmark_world(landmark))
+        let Some((anchor_orientation, anchor_bearing)) =
+            self.landmark(landmark_id).and_then(|landmark| {
+                self.keyframe(landmark.anchor)
+                    .map(|anchor| (anchor.orientation, landmark.bearing))
+            })
         else {
             return;
         };
-        let anchor_position = self
-            .landmark(landmark_id)
-            .and_then(|landmark| self.keyframe(landmark.anchor))
-            .map(|keyframe| keyframe.position);
-        let Some(anchor_position) = anchor_position else {
-            return;
-        };
-        let _ = intrinsics;
-        let _ = pixel;
-        let ray_anchor = (world - anchor_position).normalize_or_zero();
-        let ray_observer = (world - observer_position).normalize_or_zero();
+        // Parallax is an angular observation and must come from the measured
+        // rays. Deriving the observer ray from the landmark's current
+        // prior-depth world point makes convergence circular: a wrong depth
+        // can falsely declare itself observed and release its prior.
+        let ray_anchor = (anchor_orientation * anchor_bearing).normalize_or_zero();
+        let ray_observer = (observer_orientation
+            * intrinsics.bearing(f64::from(pixel.0), f64::from(pixel.1)))
+        .normalize_or_zero();
         let parallax = ray_anchor
             .dot(ray_observer)
             .clamp(-1.0, 1.0)
@@ -246,7 +237,11 @@ impl Map {
     /// Removes landmarks with a persistent outlier streak; returns their ids
     /// so the front-end can unbind tracks. Unconverged landmarks get a longer
     /// leash — their depth is still being learned, so misfits are expected.
-    pub fn cull_outlier_landmarks(&mut self, converged_streak: u32, unconverged_streak: u32) -> Vec<u32> {
+    pub fn cull_outlier_landmarks(
+        &mut self,
+        converged_streak: u32,
+        unconverged_streak: u32,
+    ) -> Vec<u32> {
         let over_limit = |landmark: &Landmark| {
             let limit = if landmark.converged() {
                 converged_streak
@@ -292,9 +287,82 @@ impl Map {
             .map(|landmark| 1.0 / landmark.inverse_depth.max(MIN_INVERSE_DEPTH))
             .collect();
         if converged.is_empty() {
-            INITIAL_DEPTH_METRES
+            initial_depth_metres()
         } else {
             converged.iter().sum::<f64>() / converged.len() as f64
         }
+    }
+}
+
+fn initial_depth_metres() -> f64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(depth) = std::env::var("AR_INITIAL_DEPTH_METRES")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && (0.2..=30.0).contains(value))
+    {
+        return depth;
+    }
+    INITIAL_DEPTH_METRES
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keyframe(orientation: DQuat) -> Keyframe {
+        Keyframe {
+            id: 0,
+            position: DVec3::new(0.0, 1.6, 0.0),
+            velocity: DVec3::ZERO,
+            orientation,
+            observations: Vec::new(),
+            preintegration: None,
+            luma: Vec::new(),
+            luma_width: 0,
+            luma_height: 0,
+            descriptor: Vec::new(),
+            full_luma: Vec::new(),
+            full_width: 0,
+            full_height: 0,
+        }
+    }
+
+    #[test]
+    fn parallax_uses_measured_observer_ray_instead_of_depth_prior() {
+        let intrinsics = Intrinsics::new(240, 427, 73.7);
+        let mut shallow = Map::new();
+        let anchor = shallow.push_keyframe(keyframe(DQuat::IDENTITY));
+        let landmark = shallow.create_landmark(anchor, DVec3::new(0.0, 0.0, -1.0));
+        shallow.landmark_mut(landmark).unwrap().inverse_depth = 1.0 / 0.2;
+
+        let mut deep = Map::new();
+        let anchor = deep.push_keyframe(keyframe(DQuat::IDENTITY));
+        let deep_landmark = deep.create_landmark(anchor, DVec3::new(0.0, 0.0, -1.0));
+        deep.landmark_mut(deep_landmark).unwrap().inverse_depth = 1.0 / 30.0;
+
+        let pixel = (
+            (intrinsics.center_x + intrinsics.focal * 0.1) as f32,
+            intrinsics.center_y as f32,
+        );
+        shallow.record_observation(landmark, DQuat::IDENTITY, &intrinsics, pixel);
+        deep.record_observation(deep_landmark, DQuat::IDENTITY, &intrinsics, pixel);
+
+        let shallow_angle = shallow.landmark(landmark).unwrap().max_parallax_degrees;
+        let deep_angle = deep.landmark(deep_landmark).unwrap().max_parallax_degrees;
+        assert!((shallow_angle - deep_angle).abs() < 1.0e-9);
+        assert!((shallow_angle - 0.1_f64.atan().to_degrees()).abs() < 0.01);
+    }
+
+    #[test]
+    fn keyframe_eviction_removes_landmarks_with_dead_anchors() {
+        let mut map = Map::new();
+        let first = map.push_keyframe(keyframe(DQuat::IDENTITY));
+        let landmark = map.create_landmark(first, DVec3::new(0.0, 0.0, -1.0));
+        for _ in 1..=MAX_KEYFRAMES {
+            map.push_keyframe(keyframe(DQuat::IDENTITY));
+        }
+        assert!(map.keyframe(first).is_none());
+        assert!(map.landmark(landmark).is_none());
     }
 }

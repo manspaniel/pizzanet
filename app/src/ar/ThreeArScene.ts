@@ -12,6 +12,7 @@ export class ThreeArScene {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
 
+  private readonly worldContent = new THREE.Group();
   private readonly anchor = new THREE.Group();
   private readonly reticle: THREE.Mesh;
   private readonly targetCameraPosition = new THREE.Vector3(0, 1.6, 0);
@@ -48,8 +49,11 @@ export class ThreeArScene {
     directional.castShadow = true;
     directional.shadow.mapSize.set(1024, 1024);
     this.scene.add(directional);
+    this.scene.add(this.worldContent);
 
-    // The cube is 1.0 m per side, centered 2.5 m in front of the session start.
+    // One world unit per side, centered 2.5 provisional metres in front of the
+    // session start. In monocular fallback mode the scale is intentionally
+    // stable from frame one but remains approximate until externally measured.
     const cube = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshStandardMaterial({
@@ -77,17 +81,17 @@ export class ThreeArScene {
     shadow.receiveShadow = true;
     this.anchor.add(shadow);
     this.anchor.position.set(0, 0, -2.5);
-    this.scene.add(this.anchor);
+    this.worldContent.add(this.anchor);
 
-    // Floor grid at y=0: 4 m extent with 0.5 m divisions, so metric scale is
-    // visually judgeable against the floor. Subtle and transparent so it works
+    // Floor grid at y=0: 4-unit extent with 0.5-unit divisions, so scale
+    // stability is visually judgeable. Subtle and transparent so it works
     // over any camera background (including the transparent native-camera mode).
     const grid = new THREE.GridHelper(4, 8, 0x9a86c4, 0x9a86c4);
     const gridMaterial = grid.material as THREE.LineBasicMaterial;
     gridMaterial.transparent = true;
     gridMaterial.opacity = 0.35;
     gridMaterial.depthWrite = false;
-    this.scene.add(grid);
+    this.worldContent.add(grid);
 
     // World-origin marker: RGB axis triad (X red, Y green, Z blue, 0.15 m each)
     // at (0, 1.6, 0) — the tracker's session-start camera position, which
@@ -123,7 +127,7 @@ export class ThreeArScene {
       originTriad.add(mesh);
     }
     originTriad.position.set(0, 1.6, 0);
-    this.scene.add(originTriad);
+    this.worldContent.add(originTriad);
 
     this.reticle = new THREE.Mesh(
       new THREE.RingGeometry(0.11, 0.15, 40).rotateX(-Math.PI / 2),
@@ -179,6 +183,10 @@ export class ThreeArScene {
     this.orientationSmoothingTimeSeconds = enabled
       ? smoothedOrientationTimeConstantSeconds
       : 0;
+  }
+
+  setWorldContentVisible(visible: boolean): void {
+    this.worldContent.visible = visible;
   }
 
   setCameraPose(pose: Float64Array): void {

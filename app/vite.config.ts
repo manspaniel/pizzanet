@@ -7,7 +7,7 @@ const isolationHeaders = {
   "Cross-Origin-Embedder-Policy": "require-corp",
   "Cross-Origin-Opener-Policy": "same-origin",
   "Permissions-Policy":
-    "camera=(self), microphone=(), accelerometer=(self), gyroscope=(self), xr-spatial-tracking=(self)",
+    "camera=(self), microphone=(), accelerometer=(self), gyroscope=(self), magnetometer=(self), xr-spatial-tracking=(self)",
 };
 
 export default defineConfig({

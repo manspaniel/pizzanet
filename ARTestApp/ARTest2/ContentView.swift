@@ -42,7 +42,9 @@ struct ContentView: View {
     private var statusText: String {
         switch recorder.phase {
         case .idle:
-            return "arkit \(recorder.arkitTrackingState)"
+            return recorder.browserSensorsReady
+                ? "WK sensors ready · arkit \(recorder.arkitTrackingState)"
+                : "Tap Start AR, then allow Motion & Orientation"
         case .recording:
             return "REC \(recorder.frameCount) frames · \(recorder.sensorEventCount) imu · arkit \(recorder.arkitTrackingState)"
         case .uploading:
@@ -68,7 +70,7 @@ struct ContentView: View {
                 )
                 .foregroundStyle(.white)
         }
-        .disabled(recorder.phase == .uploading)
+        .disabled(recorder.phase == .uploading || !recorder.browserSensorsReady)
     }
 }
 
@@ -103,26 +105,62 @@ struct ARSessionView: UIViewRepresentable {
 struct WebOverlayView: UIViewRepresentable {
     let recorder: RecordingSession
 
-    /// WKWebView never shows Safari's motion-permission prompt — it asks the
-    /// host app through this delegate, and silently denies without one.
-    final class Coordinator: NSObject, WKUIDelegate {
+    /// Owns both WebKit permission handling and the page-to-native recording
+    /// bridge. Only the app's HTTPS top-level origin is trusted.
+    final class Coordinator: NSObject, WKUIDelegate, WKScriptMessageHandler {
+        static let allowedHost = "danlinux.warg-balance.ts.net"
+        weak var recordingCore: RecordingCore?
+
+        init(recordingCore: RecordingCore) {
+            self.recordingCore = recordingCore
+        }
+
         func webView(
             _ webView: WKWebView,
             requestDeviceOrientationAndMotionPermissionFor origin: WKSecurityOrigin,
             initiatedByFrame frame: WKFrameInfo,
             decisionHandler: @escaping (WKPermissionDecision) -> Void
         ) {
-            decisionHandler(.grant)
+            guard
+                frame.isMainFrame,
+                origin.protocol == "https",
+                origin.host == Self.allowedHost
+            else {
+                decisionHandler(.deny)
+                return
+            }
+            // Let WebKit present its normal per-origin permission UI. The page
+            // invokes requestPermission directly from its Start AR click.
+            decisionHandler(.prompt)
+        }
+
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard
+                message.name == "pizzanetRawCapture",
+                message.frameInfo.isMainFrame,
+                message.frameInfo.securityOrigin.protocol == "https",
+                message.frameInfo.securityOrigin.host == Self.allowedHost
+            else {
+                return
+            }
+            recordingCore?.appendBrowserCaptureMessage(message.body)
         }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(recordingCore: recorder.core)
     }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
+        configuration.userContentController.add(
+            context.coordinator,
+            name: "pizzanetRawCapture"
+        )
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.uiDelegate = context.coordinator
         webView.isOpaque = false
@@ -135,10 +173,19 @@ struct WebOverlayView: UIViewRepresentable {
         let url = URL(string: "https://danlinux.warg-balance.ts.net/?nativeCamera=1")!
         webView.load(URLRequest(url: url))
 
-        recorder.core.onLumaFrame = { [weak webView] frameId, timestamp, width, height, base64 in
+        recorder.core.onLumaFrame = {
+            [weak webView] frameId, timestamp, width, height, base64, longAxisFov in
             DispatchQueue.main.async {
                 let script =
-                    "window.__pizzanetNativeFrame && window.__pizzanetNativeFrame(\(frameId), \(timestamp), \(width), \(height), '\(base64)');"
+                    "window.__pizzanetNativeFrame && window.__pizzanetNativeFrame(\(frameId), \(timestamp), \(width), \(height), '\(base64)', \(longAxisFov));"
+                webView?.evaluateJavaScript(script, completionHandler: nil)
+            }
+        }
+        recorder.core.onBrowserCaptureRecordingState = { [weak webView] enabled in
+            DispatchQueue.main.async {
+                let script = enabled
+                    ? "window.__pizzanetNativeRawCaptureEnabled = true;"
+                    : "window.__pizzanetFlushNativeRawCapture && window.__pizzanetFlushNativeRawCapture(); window.__pizzanetNativeRawCaptureEnabled = false;"
                 webView?.evaluateJavaScript(script, completionHandler: nil)
             }
         }
@@ -146,6 +193,14 @@ struct WebOverlayView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "pizzanetRawCapture"
+        )
+        coordinator.recordingCore?.onBrowserCaptureRecordingState = nil
+        coordinator.recordingCore?.onLumaFrame = nil
+    }
 }
 
 #Preview {

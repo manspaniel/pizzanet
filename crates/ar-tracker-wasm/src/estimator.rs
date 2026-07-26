@@ -2,11 +2,9 @@
 //! nonlinear least-squares framework (compile-time symbolic differentiation,
 //! sparse Levenberg-Marquardt).
 //!
-//! Two solvers:
-//! - [`solve_frame_pose`]: per-frame 3-DOF camera position refinement against
-//!   the current landmark map, rotation held fixed at the IMU value, with a
-//!   soft prior toward the inertial prediction and one trimming re-solve for
-//!   outlier rejection.
+//! Two arael solvers:
+//! - [`solve_frame_pose`]: retained 3-DOF native replay ablation. The default
+//!   per-frame path is the bounded 6DoF solver in `pose_refine`.
 //! - [`solve_window`]: sliding-window visual-inertial bundle adjustment —
 //!   keyframe positions and velocities plus per-landmark inverse depths,
 //!   coupled by pixel reprojection factors and world-frame accelerometer
@@ -14,10 +12,8 @@
 //!   monocular reconstruction metric: vision fixes the shape, the integrated
 //!   accelerometer fixes the scale.
 //!
-//! Rotations are never optimized: iOS sensor fusion supplies orientation with
-//! better short-term fidelity than anything recoverable from these frames, so
-//! every factor bakes its rotation in as constants. This removes SO(3)
-//! parameters, the rotation gauge, and most of the linearization cost.
+//! Window rotations remain fixed to each keyframe's robustly refined
+//! orientation. The renderer still publishes iOS sensor fusion directly.
 
 use crate::geometry::Intrinsics;
 use crate::map::{MAX_INVERSE_DEPTH, MIN_INVERSE_DEPTH, Map, Preintegration};
@@ -45,6 +41,7 @@ const WINDOW_OUTLIER_PIXELS: f64 = 5.0;
 /// shape from accelerometer noise).
 const PREINT_VELOCITY_ISIGMA: f32 = 1.0 / 0.0625;
 const PREINT_POSITION_ISIGMA: f32 = 1.0 / 0.03;
+const DEFAULT_PREINTEGRATION_WEIGHT_MULTIPLIER: f32 = 4.0;
 /// Weak inverse-depth prior keeping unobserved depths near initialization
 /// until parallax takes over. Once a landmark's parallax has converged its
 /// depth, the prior all but releases — otherwise the depth priors collectively
@@ -166,6 +163,7 @@ pub struct FrameObservation {
 
 pub struct FramePoseSolution {
     pub position: DVec3,
+    pub orientation: DQuat,
     pub matches: usize,
     pub inliers: usize,
     pub outlier_landmarks: Vec<u32>,
@@ -284,6 +282,7 @@ pub fn solve_frame_pose(
     if inlier_refs.len() < 4 {
         return Some(FramePoseSolution {
             position: predicted,
+            orientation,
             matches: observations.len(),
             inliers: inlier_refs.len(),
             outlier_landmarks,
@@ -300,6 +299,7 @@ pub fn solve_frame_pose(
     }
     Some(FramePoseSolution {
         position,
+        orientation,
         matches: observations.len(),
         inliers: inlier_refs.len(),
         outlier_landmarks,
@@ -480,9 +480,9 @@ pub fn solve_window(map: &mut Map, intrinsics: &Intrinsics) -> Option<WindowSolv
         })
         .collect();
     candidate_landmarks.sort_by(|a, b| {
-        (b.1, b.2.total_cmp(&a.2) as i8).cmp(&(a.1, 0)).then(
-            b.2.total_cmp(&a.2),
-        )
+        (b.1, b.2.total_cmp(&a.2) as i8)
+            .cmp(&(a.1, 0))
+            .then(b.2.total_cmp(&a.2))
     });
     candidate_landmarks.truncate(MAX_WINDOW_LANDMARKS);
     let selected: Vec<u32> = candidate_landmarks.iter().map(|(id, _, _)| *id).collect();
@@ -492,12 +492,18 @@ pub fn solve_window(map: &mut Map, intrinsics: &Intrinsics) -> Option<WindowSolv
 
     // Native-only ablation switches for offline replay experiments.
     #[cfg(not(target_arch = "wasm32"))]
-    let (disable_ba, disable_preint) = (
+    let (disable_ba, disable_preint, preintegration_weight_multiplier) = (
         std::env::var_os("AR_DISABLE_BA").is_some(),
         std::env::var_os("AR_DISABLE_PREINT").is_some(),
+        std::env::var("AR_PREINT_WEIGHT_MULTIPLIER")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite() && (0.1..=10.0).contains(value))
+            .unwrap_or(DEFAULT_PREINTEGRATION_WEIGHT_MULTIPLIER),
     );
     #[cfg(target_arch = "wasm32")]
-    let (disable_ba, disable_preint) = (false, false);
+    let (disable_ba, disable_preint, preintegration_weight_multiplier) =
+        (false, false, DEFAULT_PREINTEGRATION_WEIGHT_MULTIPLIER);
     if disable_ba {
         return None;
     }
@@ -669,8 +675,8 @@ pub fn solve_window(map: &mut Map, intrinsics: &Intrinsics) -> Option<WindowSolv
             dt: preintegration.duration_seconds as f32,
             dv: vec3_to_f32(preintegration.delta_velocity),
             dp: vec3_to_f32(preintegration.delta_position),
-            isigma_v: PREINT_VELOCITY_ISIGMA,
-            isigma_p: PREINT_POSITION_ISIGMA,
+            isigma_v: PREINT_VELOCITY_ISIGMA * preintegration_weight_multiplier,
+            isigma_p: PREINT_POSITION_ISIGMA * preintegration_weight_multiplier,
             hb: CrossBlock::new(),
         });
     }

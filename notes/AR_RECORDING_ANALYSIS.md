@@ -134,3 +134,27 @@ limited state versus 28–64% for the old tracker: frame-to-frame optical flow a
 10 Hz sees ~3× the inter-frame motion the new front-end is designed for
 (240px @ 30 Hz). These recordings remain a divergence/regression guard, not a
 tuning target — capture new sessions at the new settings for that.
+
+## Synchronized ARKit reference — 2026-07-24
+
+The 11 native 240px/30 Hz bundles add an exact same-frame ARKit pose for every
+luma image. They are now the primary quantitative tuning set. The current
+raw-input replay, contract audit, estimator changes, before/after ARKit
+metrics, and reproduction commands are documented in
+[`ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md`](ARKIT_GROUND_TRUTH_TUNING_2026-07-24.md).
+
+## Literal WKWebView capture contract — 2026-07-25
+
+New native recordings no longer put CoreMotion-derived approximations in the
+canonical sensor stream. `sensor-events.ndjson` contains the exact
+`devicemotion` / `deviceorientation` values and page-clock timestamps consumed
+by the live Rust/WASM tracker. Native CoreMotion is retained separately in
+`coremotion-events.ndjson` for diagnosis.
+
+`wk-frame-timing.ndjson` records each luma bridge receipt, the running-minimum
+native-to-page clock mapping, the exact timestamp pushed to Rust, and whether
+the page accepted or skipped that frame. `vio-replay` automatically uses this
+sidecar when present, so sensor and camera replay share the live page clock
+without treating JS bridge latency as capture time. Existing recordings lack
+the sidecar and continue to use their original boot-time/synthesized-event
+contract.

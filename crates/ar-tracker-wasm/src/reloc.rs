@@ -113,7 +113,6 @@ fn descriptor_correlation(left: &[i8], right: &[i8]) -> f64 {
     }
 }
 
-
 pub fn visual_frame_descriptor(pixels: &[u8], width: usize, height: usize) -> Vec<i8> {
     const COLUMNS: usize = 8;
     const ROWS: usize = 12;
@@ -172,8 +171,11 @@ pub fn find_appearance_relocalization(
         })
         .filter_map(|(index, keyframe)| {
             let correlation = descriptor_correlation(keyframe.descriptor, current.descriptor);
-            (correlation >= APPEARANCE_LOOP_MIN_CORRELATION)
-                .then_some((correlation, index, keyframe))
+            (correlation >= APPEARANCE_LOOP_MIN_CORRELATION).then_some((
+                correlation,
+                index,
+                keyframe,
+            ))
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| right.0.total_cmp(&left.0));

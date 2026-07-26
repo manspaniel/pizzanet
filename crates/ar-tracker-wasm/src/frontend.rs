@@ -8,8 +8,8 @@
 
 use image::GrayImage;
 use optical_flow_lk::{
-    DEFAULT_MIN_EIGEN_THRESHOLD, TrackStatus, TrackerContext, build_pyramid,
-    calc_optical_flow_ex, good_features_to_track_grid,
+    DEFAULT_MIN_EIGEN_THRESHOLD, TrackStatus, TrackerContext, build_pyramid, calc_optical_flow_ex,
+    good_features_to_track_grid,
 };
 
 const LK_PYRAMID_LEVELS: usize = 4;
@@ -115,8 +115,7 @@ impl FrontEnd {
         }
 
         if !self.tracks.is_empty() {
-            self.context
-                .prepare(&previous, &image, LK_PYRAMID_LEVELS);
+            self.context.prepare(&previous, &image, LK_PYRAMID_LEVELS);
             let points: Vec<(f32, f32)> = self.tracks.iter().map(|track| track.pixel).collect();
             let predicted: Vec<(f32, f32)> = self
                 .tracks
@@ -136,10 +135,8 @@ impl FrontEnd {
             let height = image.height() as f32;
             let mut kept = Vec::with_capacity(self.tracks.len());
             for (track, result) in self.tracks.drain(..).zip(results) {
-                let usable = matches!(
-                    result.status,
-                    TrackStatus::Tracked | TrackStatus::Diverged
-                ) && result.error <= LK_MAX_PHOTOMETRIC_ERROR
+                let usable = matches!(result.status, TrackStatus::Tracked | TrackStatus::Diverged)
+                    && result.error <= LK_MAX_PHOTOMETRIC_ERROR
                     && result.pos.0 >= BORDER_PIXELS
                     && result.pos.1 >= BORDER_PIXELS
                     && result.pos.0 <= width - 1.0 - BORDER_PIXELS
@@ -221,11 +218,7 @@ impl FrontEnd {
     /// forward-backward round trip. `candidates` holds
     /// `(landmark_id, keyframe_pixel, seed_pixel)` for landmarks not currently
     /// bound to a live track. Returns how many were recovered as new tracks.
-    pub fn reacquire(
-        &mut self,
-        reference: &GrayImage,
-        candidates: &[ReacquireCandidate],
-    ) -> usize {
+    pub fn reacquire(&mut self, reference: &GrayImage, candidates: &[ReacquireCandidate]) -> usize {
         let Some(current) = self.previous.as_ref() else {
             return 0;
         };
@@ -245,8 +238,7 @@ impl FrontEnd {
             LK_MAX_ITERATIONS,
             DEFAULT_MIN_EIGEN_THRESHOLD,
         );
-        let forward_positions: Vec<(f32, f32)> =
-            forward.iter().map(|result| result.pos).collect();
+        let forward_positions: Vec<(f32, f32)> = forward.iter().map(|result| result.pos).collect();
         let backward = calc_optical_flow_ex(
             &current_pyramid,
             &reference_pyramid,
@@ -258,9 +250,8 @@ impl FrontEnd {
         );
         let width = current.width() as f32;
         let height = current.height() as f32;
-        let usable = |status: TrackStatus| {
-            matches!(status, TrackStatus::Tracked | TrackStatus::Diverged)
-        };
+        let usable =
+            |status: TrackStatus| matches!(status, TrackStatus::Tracked | TrackStatus::Diverged);
         let mut recovered = 0;
         for (index, (landmark, keyframe_pixel, _)) in candidates.iter().enumerate() {
             let result = &forward[index];
@@ -271,8 +262,8 @@ impl FrontEnd {
             {
                 continue;
             }
-            let round_trip = (reverse.pos.0 - keyframe_pixel.0)
-                .hypot(reverse.pos.1 - keyframe_pixel.1);
+            let round_trip =
+                (reverse.pos.0 - keyframe_pixel.0).hypot(reverse.pos.1 - keyframe_pixel.1);
             if round_trip > LK_FB_THRESHOLD_PIXELS * 1.5 {
                 continue;
             }

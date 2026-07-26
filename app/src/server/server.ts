@@ -9,6 +9,12 @@ const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const recordingsRoot = resolve(repositoryRoot, "datasets", "ar-recordings");
 const maximumRequestBytes = 750 * 1024 * 1024;
 const maximumSidecarCharacters = 64 * 1024 * 1024;
+const documentHeaders = {
+  "Cross-Origin-Embedder-Policy": "require-corp",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy":
+    "camera=(self), microphone=(), accelerometer=(self), gyroscope=(self), magnetometer=(self), xr-spatial-tracking=(self)",
+};
 
 const app = new Hono<{ Bindings: { vite: ViteDevServer } }>();
 
@@ -22,6 +28,19 @@ function requiredText(
     throw new Error(`Invalid ${field} field.`);
   }
   return value;
+}
+
+function optionalText(
+  form: FormData,
+  field: string,
+  maximumCharacters: number,
+): string | null {
+  const value = form.get(field);
+  if (value === null) return null;
+  if (typeof value !== "string" || value.length > maximumCharacters) {
+    throw new Error(`Invalid ${field} field.`);
+  }
+  return value.length > 0 ? value : null;
 }
 
 function videoExtension(mimeType: string): "mp4" | "webm" {
@@ -41,6 +60,9 @@ app.get("/", async (c) => {
     await readFile("./index.html", "utf8"),
     "./",
   );
+  for (const [name, value] of Object.entries(documentHeaders)) {
+    c.header(name, value);
+  }
   return c.html(html);
 });
 
@@ -71,6 +93,16 @@ app.post("/api/dev/recordings", async (c) => {
     const arkitPoses = form.get("arkitPoses");
     const arkitPosesText =
       typeof arkitPoses === "string" && arkitPoses.length > 0 ? arkitPoses : null;
+    const coreMotionEvents = optionalText(
+      form,
+      "coreMotionEvents",
+      maximumSidecarCharacters,
+    );
+    const browserFrameTiming = optionalText(
+      form,
+      "browserFrameTiming",
+      maximumSidecarCharacters,
+    );
     if (!hasVideo && arkitPosesText === null) {
       throw new Error("A non-empty camera video is required.");
     }
@@ -121,6 +153,12 @@ app.post("/api/dev/recordings", async (c) => {
         sensorEvents: "sensor-events.ndjson",
         trackerLuma: "tracker-luma.gray",
         ...(arkitPosesText === null ? {} : { arkitPoses: "arkit-poses.ndjson" }),
+        ...(coreMotionEvents === null
+          ? {}
+          : { coreMotionEvents: "coremotion-events.ndjson" }),
+        ...(browserFrameTiming === null
+          ? {}
+          : { browserFrameTiming: "wk-frame-timing.ndjson" }),
       },
       receivedAtIso: new Date().toISOString(),
       recordingId,
@@ -148,6 +186,22 @@ app.post("/api/dev/recordings", async (c) => {
     if (arkitPosesText !== null) {
       writes.push(
         writeFile(resolve(temporaryDirectory, "arkit-poses.ndjson"), arkitPosesText),
+      );
+    }
+    if (coreMotionEvents !== null) {
+      writes.push(
+        writeFile(
+          resolve(temporaryDirectory, "coremotion-events.ndjson"),
+          coreMotionEvents,
+        ),
+      );
+    }
+    if (browserFrameTiming !== null) {
+      writes.push(
+        writeFile(
+          resolve(temporaryDirectory, "wk-frame-timing.ndjson"),
+          browserFrameTiming,
+        ),
       );
     }
     await Promise.all(writes);
